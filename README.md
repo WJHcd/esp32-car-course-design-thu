@@ -10,6 +10,7 @@
 - 本仓库使用 **main + feature 分支 + Pull Request** 的轻量协作流程，**所有代码改动走 PR，不要在 main 上直接提交**。
 - 协作规范、分支命名、commit 格式、冲突处理：请阅读 **[CONTRIBUTING.md](CONTRIBUTING.md)**。
 - ⚠️ 注意：仓库当前位于 OneDrive 目录下，**强烈建议克隆到本地非云同步路径**（如 `C:\esp-projects\`）使用，避免 `.git` 目录损坏，详见 CONTRIBUTING.md 第 5.1 节。
+- 🚀 **首次上传到 GitHub**：运行 `./scripts/upload-to-github.ps1`（会安装/登录 GitHub CLI 并创建私有仓库推送）。
 
 ---
 
