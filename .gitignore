@@ -1,0 +1,34 @@
+# ===== 通用 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+
+# ===== Python / 虚拟环境 =====
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ===== ESP-IDF 构建产物（可重新生成）=====
+build/
+managed_components/
+dependencies.lock
+sdkconfig.old
+.cache/
+cmake-build-*/
+sdkconfig.defaults.old
+
+# ===== IDE / 编辑器（个人配置不入库）=====
+.vscode/
+.idea/
+*.code-workspace
+*.suo
+*.user
+
+# ===== Arduino =====
+# Arduino 库目录等
+libraries/

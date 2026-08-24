@@ -1,0 +1,1991 @@
+===== PAGE 1 =====
+ESP32-S3-WROOM-2
+඀ ϱЧ 1.7
+2.4 GHz Wi-Fi (802. 11b/g/n) + ড࿩ ® 5 ଆቆ
+ଽᇂ ESP32-S3 ༢ਙྉோđXtensa®ނ32 ໊ LX7 ԩ৘ఖ
+Flash ቋնॖ࿊ 32 MB (Octal)đPSRAM ቋնॖ࿊ 16 MB (Octal)
+33۱GPIOຓഡ
+ϰᄛ PCB ฿ཌ
+ESP32-S3-WROOM-2
+www.espressif.com
+===== PAGE 2 =====
+1ඍ
+1ඍ
+ඪૼğ
+ğ
+https://www.espressif.com/documentation/esp32-s3-wroom-2_datasheet_cn.pdf
+1. 1 หྟ
+CPUோഈթԥఖ
+• ଽᇂESP32-S3 ྉோđXtensa®ނ32 ໊LX7
+ۚ
+ղ240 MHzൈᇒ௔ੱ
+• 384 KB ROM
+• 512 KB SRAM
+• 16 KB RTC SRAM
+• ቋն16 MB PSRAM
+Wi-Fi
+• 802.11b/g/n
+• 802.11nղ150 Mbps
+•ކTX/RX A-MPDU, TX/RX A-MSDU)
+• 0.4 µsۯࡗ޹
+•ຶğ2412 ~2484 MHz
+ড࿩
+•ড࿩(Bluetooth LE)ğBluetooth 5a
+Bluetooth mesh
+• ෎ੱᆦӻ125 Kbpsa500 Kbpsa1 Mbpsa2
+Mbps
+•Ѭঔᅚ(Advertising Extensions)
+•Ѭ(Multiple Advertisement Sets)
+•࿊ᄴ(Channel Selection Algorithm #2)
+• Wi-Fi฿ཌ
+ຓഡ
+• 33۱GPIO
+– 4ቔູstrapping࢖ܵ
+•SPIaLCD१aCamera१aUARTaI2Ca
+I2SඔఖaLED PWMaಆ෎
+USB 2.0 OTGaUSB Ա१/JTAG ॥ᇅఖa
+MCPWMaSD/MMC॥ᇅఖaGDMAa
+TWAI®ಸISO 11898-1Ď aADCaԨଃ
+ܐ
+ࡱ
+•40 MHzᆒ
+• ቋն32 MB Octal SPI flash
+฿ཌ࿊྘
+• ϰᄛPCB ฿ཌ
+ࡱ
+•࿢/࿢ğ3.0 ~3.6 V
+•ğ ⚶40 ~65 °C
+ಪᆣ
+• RF࡮ᆣ඀
+•ЌಪᆣğRoHS/REACH
+ҩ൫
+• HTOL/HTSL/uHAST/TCT/ESD
+࠯2
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 3 =====
+1ඍ
+1.2б
+ESP32-S3-WROOM-2 ൞๙Ⴈ྘Wi-Fi +ড࿩MCUຩ઎ᄎෘି
+ބAIoTე
+b
+ESP32-S3-WROOM-2 ҐႨPCB ϰᄛ฿ཌđଆቆ஥ᇂESP32-S3R8VࠇESP32-S3R16V ྉோđॖ࿊16/32 MB
+flasha8/16 MB PSRAMb౨ᇿၩđ೏षఓPSRAM ECC֞ۚ85 °Cđ֌൞
+PSRAMഒ1/16b
+бೂ༯і෮ൕğ
+і 1-1. ESP32-S3-WROOM-2б
+؇3 ଆቆԄժ4
+ݼFlash1, 2 PSRAM2
+(°C) (mm)
+ESP32-S3-WROOM-2-N32R16V 32 MB (Octal SPI) 16 MB (Octal SPI)
+⚶40 ∼65 18.0 × 25.5 × 3.1ESP32-S3-WROOM-2-N16R8Vč๔ӁĎ 16 MB (Octal SPI) 8 MB (Octal SPI)ESP32-S3-WROOM-2-N32R8Vč๔ӁĎ 32 MB (Octal SPI)
+1 ଏಪ౦ঃ༯đଆቆSPI flashቋնൈᇒ௔ੱູ120 MHzିb
+2֥PSRAMࢫ6.5۬ܿb
+3b
+4ࢫ10 ଆቆԄժ.
+൞ESP32-S3 ༢ਙྉோbྉோձᄛXtensa® 32 ໊LX7ԩ৘ఖ(ᄎෘֆჭ)ቔ
+ղ240 MHzbCPUӑԛᚐ
+ᆴb
+ඪૼğ
+ႿESP32-S3ྐ༏౨ҕॉ uESP32-S3඀vb
+֥ESP-IDFః෰ྉோϱЧྐ༏đ ౨ҕॉuESP32-S3 ༢ਙྉோा༂іv
+>ࢫྉோϱЧѓ്b
+1.3 ႋႨ
+•ं
+•߄׮
+•ࡲ
+•ሰӁ௖
+•୪ြ
+• POSࠏ
+•ఖದ
+• ၻ௔ഡС
+•ݻۿ֮IoTཌఖ
+•ݻۿ֮IoT੣ఖ
+• ജཞ๨൪௔ੀԮൻ
+• USB ഡС
+• ეၻ്љ
+• ๭ཞ്љ
+• Wi-Fi +ড࿩ຩव
+•ႋ
+࠯3
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 4 =====
+ଢ੣
+ଢ੣
+1ඍ 2
+1.1 หྟ 2
+1.2б 3
+1.3 ႋႨ 3
+2ିॿ๭ 8
+3ၬ 9
+3.1҃अ 9
+3.2૭ඍ 9
+4஥ᇂཛ 12
+4.1ଆൔ॥ᇅ 13
+4.2 VDD_SPI࿢॥ᇅ 14
+4.3 ROM ರᆽյႆ॥ᇅ 14
+4.4 JTAGჷ॥ᇅ 14
+4.5໊ 15
+5 ຓഡ 16
+5.1ඍ 16
+5.2 ຓഡ૭ඍ 16
+5.2.1१ 16
+5.2.1.1 UART ॥ᇅఖ 16
+5.2.1.2 I2C१ 17
+5.2.1.3 I2S१ 17
+5.2.1.4 LCD აCamera ॥ᇅఖ 17
+5.2.1.5१(SPI) 18
+5.2.1.6१(TWAI®) 19
+5.2.1.7 USB 2.0 OTG१ 20
+5.2.1.8 USB Ա१/JTAG ॥ᇅఖ 21
+5.2.1.9 SD/MMC॥ᇅఖ 21
+5.2.1.10 LED PWM ॥ᇅఖ 22
+5.2.1.11ᇅఖ(MCPWM) 22
+5.2.1.12ຓဪ॥(RMT) 23
+5.2.1.13ඔ॥ᇅఖ(PCNT) 23
+5.2.2ԩ৘ 24
+5.2.2.1 SAR ADC 24
+5.2.2.2ఖ 24
+5.2.2.3ఖ 24
+6గหྟ 25
+6.1ᆴ 25
+6.2ࡱ25
+࠯4
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 5 =====
+ଢ੣
+6.3గหྟ(3.3 V, 25 °C) 25
+6.4หྟ 26
+6.4.1 Activeݻۿ֥26
+6.4.2ݻۿ֥26
+6.5۬ܿ28
+7 ഝ௔หྟ 29
+7.1 Wi-Fi ഝ௔ 29
+7.1.1 Wi-Fiഝఖ(TX) หྟ 29
+7.1.2 Wi-Fi൬ఖ(RX) หྟ 30
+7.2ড࿩ഝ௔ 31
+7.2.1ഝఖ(TX) หྟ 31
+7.2.2൬ఖ(RX) หྟ 33
+8 ଆቆჰ৘๭ 36
+9ჰ৘๭ 37
+10 ଆቆԄժ 38
+11 PCBၰ 39
+11.1 PCBል๭ྙ 39
+11.2 PCB٢40
+12 Ӂ௖ԩ৘ 41
+12.1ࡱ41
+12.2׈٢׈࣡ESD) 41
+12.3౷ཌ 41
+12.4׮42
+৘ 43
+ሧჷ 44
+৥ൎ 45
+࠯5
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 6 =====
+۬
+۬
+1-1 ESP32-S3-WROOM-2б 3
+3-1ၬ 10
+4-1 Strappingଏಪ஥ᇂ 12
+4-2 Strappingൈ྽ҕඔඪૼ 13
+4-3ଆൔ॥ᇅ 13
+4-4 VDD_SPI࿢॥ᇅ 14
+4-5 JTAGჷ॥ᇅ 14
+4-6໊ൈ྽ҕඔඪૼ 15
+6-1ᆴ 25
+6-2ࡱ25
+6-3గหྟ(3.3 V, 25 °C) 25
+6-4 Activeݻۿ26
+6-5 Modem-sleepݻۿ֥27
+6-6ݻۿ֥27
+6-7 Flash۬ܿ28
+6-8 PSRAM۬ܿ28
+7-1 Wi-Fi۬ܿ29
+7-2ބEVMކژ802.11ੱ 29
+7-3ഝEVM ҩ൫1 29
+7-4؇30
+7-5௜ 31
+7-6ၝᇅ 31
+7-7۬ܿ31
+7-8ড࿩-ഝఖหྟ- 1 Mbps 31
+7-9ড࿩-ഝఖหྟ- 2 Mbps 32
+7-10ড࿩-ഝఖหྟ- 125 Kbps 32
+7-11ড࿩-ഝఖหྟ- 500 Kbps 32
+7-12ড࿩-൬ఖหྟ- 1 Mbps 33
+7-13ড࿩-൬ఖหྟ- 2 Mbps 33
+7-14ড࿩-൬ఖหྟ- 125 Kbps 34
+7-15ড࿩-൬ఖหྟ- 500 Kbps 34
+࠯6
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 7 =====
+Ҭ๭
+Ҭ๭
+2-1ିॿ๭ 8
+3-1൪๭Ď 9
+4-1 Strappingൈ྽ҕඔ๭ 13
+4-2໊ൈ྽ҕඔ๭ 15
+8-1 ჰ৘๭ 36
+9-1ჰ৘๭ 37
+10-1 ଆቆԄժ 38
+11-1ࡩPCBል๭ 39
+12-1౷ཌ 41
+࠯7
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 8 =====
+2ିॿ๭
+2ିॿ๭
+ESP32-S3R8VESP32-S3R16VRF Matching40 MHzCrystal3V3ESP32-S3-WROOM-2UENGPIOsAntenna
+RF Matching40 MHzCrystal3V3ESP32-S3-WROOM-2ENGPIOsAntennaOSPI FlashSPICS0SPICLKSPIDSPIQSPIHDSPIWPVDD_SPI
+OSPI FlashSPICS0SPICLKSPIDSPIQSPIHDSPIWPVDD_SPIOSPI PSRAMSPIIO4
+OSPI PSRAMSPIIO5SPIIO6SPIIO7SPIDQSSPIIO4SPIIO5SPIIO6SPIIO7SPIDQSESP32-S3R8VESP32-S3R16V
+๭ 2-1.ିॿ๭
+ඪૼğ
+ልଽ PSRAM༢đ౨ҕॉ uESP32-S3඀v >۬ልଽ flash/
+PSRAM༢b
+࠯8
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 9 =====
+3ၬ
+3ၬ
+3. 1҃अ
+҃अ౨ҕॉ๭10 ଆቆԄժb
+GND3V3ENIO4IO5IO6IO7IO20
+4039383736353433323130292827
+GNDIO1IO2TXD0RXD0IO42IO41IO40IO39IO38NCNCNCIO0
+41GND
+Keepout Zone
+GNDGNDGNDGNDGNDGNDGNDGND181920IO10IO11IO12212223IO13IO14IO21151617IO3IO46IO9242526IO47IO48IO45
+1234567891011121314IO15IO16IO17IO18IO8IO19
+๭ 3-1.൪๭Ď
+ඪૼğ
+ྐ༏đ౨Ұु uESP32-S3ᆷଲv>ࢫׄb
+3.2૭ඍ
+Ⴕ41і3-1ၬb
+஥౨ҕॉ uESP32-S3඀vb
+࠯9
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 10 =====
+3ၬ
+і 3-1.ၬ
+଀ӫݼো྘1ି
+GND 1 Pֹࢤ
+3V3 2 P׈܂
+EN 3 I
+௜ğྉோ൐ିĠ
+оĠ
+ᇿၩ҂ିಞENॢb
+IO4 4 I/O/T RTC_GPIO4, GPIO4, TOUCH4, ADC1_CH3
+IO5 5 I/O/T RTC_GPIO5, GPIO5, TOUCH5, ADC1_CH4
+IO6 6 I/O/T RTC_GPIO6, GPIO6, TOUCH6, ADC1_CH5
+IO7 7 I/O/T RTC_GPIO7,GPIO7, TOUCH7, ADC1_CH6
+IO15 8 I/O/T RTC_GPIO15, GPIO15, U0RTS, ADC2_CH4, XTAL_32K_P
+IO16 9 I/O/T RTC_GPIO16, GPIO16, U0CTS, ADC2_CH5, XTAL_32K_N
+IO17 10 I/O/T RTC_GPIO17,GPIO17, U1TXD, ADC2_CH6
+IO18 11 I/O/T RTC_GPIO18, GPIO18, U1RXD, ADC2_CH7, CLK_OUT3
+IO8 12 I/O/T RTC_GPIO8, GPIO8, TOUCH8, ADC1_CH7, SUBSPICS1
+IO19 13 I/O/T RTC_GPIO19, GPIO19, U1RTS, ADC2_CH8, CLK_OUT2,USB_D-
+IO20 14 I/O/T RTC_GPIO20, GPIO20, U1CTS, ADC2_CH9, CLK_OUT1,USB_D+
+IO3 15 I/O/T RTC_GPIO3, GPIO3, TOUCH3, ADC1_CH2
+IO46 16 I/O/T GPIO46
+IO9 17 I/O/T RTC_GPIO9, GPIO9, TOUCH9, ADC1_CH8, FSPIHD, SUBSPIHD
+IO10 18 I/O/T RTC_GPIO10, GPIO10, TOUCH10, ADC1_CH9, FSPICS0, FSPIIO4,
+SUBSPICS0
+IO11 19 I/O/T RTC_GPIO11, GPIO11, TOUCH11, ADC2_CH0, FSPID, FSPIIO5, SUBSPID
+IO12 20 I/O/T RTC_GPIO12, GPIO12, TOUCH12, ADC2_CH1, FSPICLK, FSPIIO6,
+SUBSPICLK
+IO13 21 I/O/T RTC_GPIO13, GPIO13, TOUCH13, ADC2_CH2, FSPIQ, FSPIIO7, SUBSPIQ
+IO14 22 I/O/T RTC_GPIO14, GPIO14, TOUCH14, ADC2_CH3, FSPIWP, FSPIDQS,
+SUBSPIWP
+IO21 23 I/O/T RTC_GPIO21, GPIO21
+IO47 24 I/O/T SPICLK_P_DIFF, GPIO472, SUBSPICLK_P_DIFF
+IO48 25 I/O/T SPICLK_N_DIFF,GPIO482, SUBSPICLK_N_DIFF
+IO45 26 I/O/T GPIO45
+IO0 27 I/O/T RTC_GPIO0, GPIO0
+NC 28 i࢖ܵ
+NC 29 i࢖ܵ
+NC 30 i࢖ܵ
+IO38 31 I/O/T GPIO38, FSPIWP, SUBSPIWP
+IO39 32 I/O/T MTCK, GPIO39, CLK_OUT3, SUBSPICS1
+IO40 33 I/O/T MTDO, GPIO40, CLK_OUT2
+IO41 34 I/O/T MTDI, GPIO41, CLK_OUT1
+IO42 35 I/O/T MTMS, GPIO42
+RXD0 36 I/O/T U0RXD, GPIO44, CLK_OUT2
+༯်
+࠯10
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 11 =====
+3ၬ
+і 3-1 –ഈ်
+଀ӫݼো྘1ି
+TXD0 37 I/O/T U0TXD, GPIO43, CLK_OUT1
+IO2 38 I/O/T RTC_GPIO2, GPIO2, TOUCH2, ADC1_CH1
+IO1 39 I/O/T RTC_GPIO1, GPIO1, TOUCH1, ADC1_CH0
+GND 40 Pֹࢤ
+EPAD 41 Pֹࢤ
+1 PჷĠIğൻೆĠOğൻԛĠTିb
+2 ႮႿ ESP32-S3R8VބESP32-S3R16V֥VDD_SPI࿢ၘഡᇂູ 1.8 Vđ෮ၛđ҂๝Ⴟః෰
+GPIOđᄝVDD_SPI֥GPIO47ބGPIO48࿢္ູ1.8 Vb
+࠯11
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 12 =====
+4஥ᇂཛ
+4஥ᇂཛ
+ඪૼğ
+ၛ༯ଽಸᅋሱ uESP32-S3඀v>ࢫ஥ᇂཛb ྉோStrapping༢đ ॖ
+ࢫ8 ଆቆჰ৘๭b
+ݖStrappingބ࢖ܵeFuseҕ
+აğ
+•ଆൔ
+– StrappingğGPIO0ބGPIO46
+• VDD_SPI࿢
+– StrappingğGPIO45
+– eFuse ҕඔğEFUSE_VDD_SPI_FORCEބEFUSE_VDD_SPI_TIEH
+• ROM ರᆽյႆ
+– StrappingğGPIO46
+– eFuse ҕඔğEFUSE_UART_PRINT_CONTROLބEFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT
+• JT AGჷ
+– StrappingğGPIO3
+– eFuse ҕඔğEFUSE_DIS_PAD_JTAGaEFUSE_DIS_USB_JTAGބEFUSE_STRAP_JTAG_SEL
+ഈඍeFuseଏಪᆴनູ0beFuse ᆺିഎཿ၂Ցđ၂֊എཿູ1ູ
+0എཿeFuseྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫeFuse ॥ᇅఖb
+ഈඍstrapping௜ᆴĎ౼थႿ
+ଽ҆೐ഈঘ/ሑ෿b
+і 4-1. Strappingଏಪ஥ᇂ
+Strapping࢖ܵଏಪ஥ᇂ ᆴ
+GPIO0 ೐ഈঘ 1
+GPIO3ॢ –
+GPIO45 ೐༯ঘ 0
+GPIO46 ೐༯ঘ 0
+эstrappingຓ҆༯ঘ/ݔESP32-S3ࠏMCUՖഡСđ
+strappingࠏMCU ॥ᇅb
+෮Ⴕstrapping໊ൈđ෭թఖҐဢѩթԥཌྷႋstrappingו
+bၹՎđstrapping౼đstrapping
+ቔູ௴๙IO൐Ⴈb
+Strappingൈ྽ླ቎࿖і4-2๭4-1֥ࡗބࡗb
+࠯12
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 13 =====
+4஥ᇂཛ
+і 4-2. Strappingൈ྽ҕඔඪૼ
+ҕඔ ඪૼ ቋཬᆴ (ms)
+tSUࡗۚENࡗ0
+tH
+ࡗࠧENastrappingэູ௴๙IO۽
+౼strappingࡗ3
+Strapping pin
+VIL_nRST
+VIH
+tSU tH
+EN
+๭ 4-1. Strappingൈ྽ҕඔ๭
+4. 1ଆൔ॥ᇅ
+đGPIO0ބGPIO46і4-3ଆൔ॥ᇅb
+і 4-3.ଆൔ॥ᇅ
+ଆൔ GPIO0 GPIO46
+SPI Boot 1 ಩ၩᆴ
+Joint Download Boot2 0 0
+1ՙଏಪ஥ᇂb
+2Joint Download Bootଆൔ༯ᆦӻၛ༯༯ᄛ
+ൔğ
+•USB Download Bootğ
+–USB-Serial-JTAG Download Boot
+–USB-OTG Download Boot
+•UART Download Boot
+ᄝSPI Bootଆൔ༯đROMՖSPI flash༢๤b
+ᄝJoint Download BootݖUSBࠇUART0༯ᄛᇀflashࡱ
+༯ᄛᇀSRAM ѩᄎྛSRAMӱ྽b
+ԢਔSPI BootބJoint Download BootଆൔđESP32-S3ᆦӻSPI Download Boot࡮
+uESP32-S3ඌҕॉ൭Ҩv>ࢫྉோ Boot ॥ᇅb
+࠯13
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 14 =====
+4஥ᇂཛ
+4.2 VDD_SPI࿢॥ᇅ
+ൔđऎุ౼थႿEFUSE_VDD_SPI_FORCEᆴb
+і 4-4. VDD_SPI࿢॥ᇅ
+VDD_SPIჷ2࿢ EFUSE_ VDD_SPI_FORCE GPIO45 EFUSE_ VDD_SPI_ TIEH
+VDD3P3_RTCݖRSP I׈܂3.3 V 0 0੻Flash ໗࿢ఖ 1.8 V 1
+Flash ໗࿢ఖ 1.8 V 1੻ 0
+VDD3P3_RTCݖRSP I׈܂3.3 V 1
+1ՙଏಪ஥ᇂb
+2ࢫuESP32-S3඀v>ࢫ৘b
+4.3 ROM ರᆽյႆ॥ᇅ
+ӱᇏđROM ս઒ರᆽॖյႆᇀğ
+•čଏಪĎUART0ބUSB Ա१/JT AG॥ᇅఖ
+• USB Ա१/JTAG ॥ᇅఖ
+• UART0
+ބeFuseоUARTބUSB Ա१/JTAG֥ROMିbབྷ༥ྐ༏౨
+ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫྉோ Boot ॥ᇅb
+4.4 JT AGჷ॥ᇅ
+đGPIO3 ॖႨႿ॥ᇅJTAGቅđstrappingᆴсྶႮ҂
+ਫ਼॥ᇅb
+ೂі4-5 ෮ൕđGPIO3 აEFUSE_DIS_PAD_JTAGaEFUSE_DIS_USB_JTAGބEFUSE_STRAP_JTAG_SEL๝
+॥ᇅJTAGჷb
+і 4-5. JT AGჷ॥ᇅ
+JT AGჷ EFUSE_DIS_PAD_JT AG EFUSE_DIS_USB_JT AG EFUSE_STRAP_JT AG_SEL GPIO3
+USB Ա१/ JT AG॥ᇅఖ
+0 0 0੻
+0 0 1 1
+1 0੻੻
+JTAG࢖ܵ2 0 0 1 0
+0 1੻੻
+JTAGо 1 1੻੻
+1ՙଏಪ஥ᇂb
+2ࠧMTDIaMTCKaMTMSބMTDOb
+࠯14
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 15 =====
+4஥ᇂཛ
+4.5໊
+࢖֥ܵENႿ
+EN๭4-2і4-6b
+VIL_nRST
+tST BL tRST
+2.8 V
+VDDA,
+VDD3P3,
+VDD3P3_RTC,
+VDD3P3_CPU
+EN
+๭ 4-2.໊ൈ྽ҕඔ๭
+і 4-6.໊ൈ྽ҕඔඪૼ
+ҕඔ ඪૼ ቋཬᆴ (µs)
+tST BL
+ENྉோభđ VDDAaVDD3P3aVDD3P3_RTCބ
+VDD3P3_CPUࡗ50
+tRST
+ENႿVIL_nRSTčऎุඔᆴҕॉі6-3ൈ
+ࡗ50
+࠯15
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 16 =====
+5 ຓഡ
+5 ຓഡ
+5. 1ඍ
+ESP32-S3ຓഡđЇওSPIaLCDaCamera१aUARTaI2CaI2SඔఖaLED
+PWMaUSB Ա१/JTAGaMCPWMaSD/MMC॥ᇅఖaTWAI®ಸISO 11898-1ࠧCANٓܿ
+2.0Ď aADCఖbՎຓđESP32-S3ಆ෎USB 2.0 On-The-Go (OTG)१ႨႿ
+USB ๙࿟b
+བྷ༥ྐ༏đ౨ҕॉuESP32-S3඀v>ࢫି૭ඍb
+ඪૼğ
+ၛ༯ଽಸԛሱ uESP32-S3඀v>ࢫຓഡ෮ႵIOᄝଆቆഈႄԛđ ၹՎᆃུྐ༏҂ປ
+ಆൡႨႿESP32-S3-WROOM-2b
+ྐ༏đॖҕॉuESP32-S3ඌҕॉ൭Ҩv>ࢫGPIOਙіb
+5.2 ຓഡ૭ඍ
+ఖb
+5.2. 1१
+१b
+5.2. 1. 1 UART ॥ᇅఖ
+ESP32-S3۱UARTࠧUART0aUART1aUART2đᆦӻၳ҄๙ྐčRS232ބ
+RS485ބIrDA֞5 Mbpsb
+หྟ
+•ൈᇒჷ
+•ѯหੱ
+•۱UARTෂFIFO൬FIFOཚ1024 x 8-bit RAM
+•ၳ҄๙ྐ
+•ି
+• ᆦӻ5/6/7/8؇
+•ᆦӻ1/1.5/2/3๔ᆸ໊
+• ᆦӻఅ୽཮ဒ໊
+• ᆦӻAT_CMDҩ
+• ᆦӻRS485 ླྀၰ
+• ᆦӻIrDA ླྀၰ
+• ᆦӻGDMA෎ඔऌ๙ྐ
+࠯16
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 17 =====
+5 ຓഡ
+• ᆦӻUARTྜଆൔ
+•ੀ॥
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫUART ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.2 I2C१
+ESP32-S3۱I2C१ॖၛႨቔI2Cଆൔb
+หྟ
+• ѓሙଆൔ(100 Kbit/s)
+• ॹ෎ଆൔ(400 Kbit/s)
+•ॖղ800 Kbit/sđ֌൳ᇅႿSCLބSDA؇
+•7ބ10 ໊࿙ᆶଆൔ
+•ᆶĎ࿙ᆶଆൔ
+ݖI2C॥ᇅI2C१b
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫI2C ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.3 I2S१
+ESP32-S3ѓሙI2Sቔđѩ౏ॖФ஥ᇂູI2S
+Աྛ8/16/24/32ඔऌଆൔđᆦӻ௔ੱՖ10 kHz֞40 MHz֥BCK ൈᇒb
+I2S֥DMA ॥ᇅఖbᆦӻTDM PCMaTDM MSBఊaTDM LSBఊaTDM PhillipsaPDMࢤ
+१b
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫI2S ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.4 LCD ა Camera ॥ᇅఖ
+ESP32-S3֥LCD აCamera֥LCDބCamera ଆॶb
+LCDđఃሹཌ8 ໊ ~16 ໊ѩྛRGBaI8080aMOTO6800ൈᇒ௔
+ੱཬႿ40 MHzbᆦӻRGB565aYUV422aYUV420aYUV411b
+࠯17
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 18 =====
+5 ຓഡ
+Camerađఃሹཌᆦӻ8 ໊ ~16 ໊DVPൈᇒ௔ੱཬႿ
+40 MHzbᆦӻRGB565aYUV422aYUV420aYUV411b
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫLCD ა Camera ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.5१ (SPI)
+ESP32-S3 ऎႵၛ༯SPI१ğ
+• SPI0܂ESP32-S3֥GDMA ॥ᇅఖაCacheልຓflash/PSRAM
+• SPI1܂CPUልຓflash/PSRAM
+• SPI2đ๙ႨSPIݖGDMA஥DMA໙
+• SPI3đ๙ႨSPIݖGDMA஥DMA໙
+หྟ
+• SPI0ބSPI1ğ
+– ᆦӻSPIaDual SPIaQuad SPIaOctal SPIaQPIބOPI ଆൔ
+– ϖཌSPI ଆൔᆦӻֆПඔऌ෎ੱ(SDR)චПඔऌ෎ੱ(DDR)
+– ൈᇒ௔ੱॖ஥ᇂđϖཌSPI SDR/DDRॖղ120 MHz
+–ູֆ໊
+• SPI2ğ
+–ଆൔ
+–ݖGDMA஥DMA໙
+– ᆦӻSPIaDual SPIaQuad SPIaOctal SPIaQPIބOPI ଆൔ
+–ྟ(CPOL)ཌྷ໊(CPHA) ॖ஥ᇂ
+– ൈᇒ௔ੱॖ஥ᇂ
+–ູֆ໊
+–Ⴕ໊ི(MSB)Ⴕ໊ི(LSB) Ⴊ༵
+–ଆൔ
+*ॖղ80 MHz
+* ϖཌSPIᆦӻֆПඔऌ෎ੱ(SDR)
+*ॖղ80 MHz
+* ϖཌSPIۚ80 MHzۚ40 MHzĎ
+*۱SPI_CS৫SPIཌྷ৵
+* CSॖ஥ᇂ
+࠯18
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 19 =====
+5 ຓഡ
+–ଆൔ
+*ॖղ60 MHz
+*ॖղ60 MHz
+* ϖཌSPIᆦӻֆПඔऌ෎ੱ(SDR)
+• SPI3ğ
+–ଆൔ
+–ݖGDMA஥DMA໙
+– ᆦӻSPIaDual SPIaQuad SPIބQPI ଆൔ
+–ྟ(CPOL)ཌྷ໊(CPHA) ॖ஥ᇂ
+– ൈᇒ௔ੱॖ஥ᇂ
+–ູֆ໊
+–Ⴕ໊ི(MSB)Ⴕ໊ི(LSB) Ⴊ༵
+–ଆൔ
+*ॖղ80 MHz
+*ॖղ80 MHz
+*۱SPI_CS৫SPIཌྷ৵
+* CSॖ஥ᇂ
+–ଆൔ
+*ॖղ60 MHz
+*ॖղ60 MHz
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫSPI ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.6१ (TWAI®)
+१(Two-Wire Automotive Interface, TWAI®)ҩհ༂a
+ିbESP32-S3۱TWAI ॥ᇅఖb
+หྟ
+•ಸISO 11898-1ླྀၰčCANٓܿ2.0Ď
+•ൔč11 ໊IDൔč29 ໊IDĎ
+• 1 Kbit/s֞1 Mbit/sбหੱ
+•ᇕҠቔଆൔğ
+–ቔଆൔ
+࠯19
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 20 =====
+5 ຓഡ
+–๐ଆൔ
+–ଆൔčԮൻ໭ླಒಪĎ
+• 64൬FIFO
+•ੲఖଆൔĎ
+•ҩაԩ৘ğ
+–ඔఖ
+–ᚐᆴ
+–੣
+–੣
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫ१b
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.7 USB 2.0 OTG१
+ESP32-S3ಆ෎USB OTGކژUSB 2.0b
+๙Ⴈหྟ
+•෎෎ੱ
+•ླྀഅླྀၰ(HNP)౨౰ླྀၰ(SRP)đनॖቔູAࠇB ഡС
+•෿FIFO (DFIFO)նཬ
+•໙ଆൔ
+– Scatter/Gather DMAଆൔ
+–Ԋ(Buffer) DMAଆൔ
+– Slave ଆൔ
+•ఖ
+•ބUSB Ա१/JTAGఖ
+•ఖ๝ൈ๧ೆ൐ႨൈđᆦӻUSB OTGބUSB Ա१/JTAGሱ็࿊҂
+ఖ൐Ⴈ
+ഡСଆൔ (Device mode) หྟ
+•ׄ؊0 Ⴅჹթᄝčචཟ॥ᇅđႮEP0 INބEP0 OUTቆӮĎ
+• 6ׄ؊ࡆڸ۱1 ~6)đॖ஥ᇂູINࠇOUT
+•؟5۱INቔčЇওEP0 INĎ
+• ෮ႵOUT۱RX FIFO
+࠯20
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 21 =====
+5 ຓഡ
+•۱IN֥TX FIFO
+ଆൔ (Host mode) หྟ
+• 8Ď
+– ႮIN აOUTđၹູINބOUTᆦӻ॥ᇅԮൻো྘b
+– ఃჅ7ॖФ஥ᇂູINࠇOUT಩ၩԮൻো྘b
+•۱RX FIFOᇛ௹ྟTX FIFOᇛ௹ྟTX FIFO۱FIFO նཬॖ஥ᇂb
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫUSB OTGb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.8 USB Ա१/JT AG॥ᇅఖ
+ESP32-S3۱USB Ա१/JTAG ॥ᇅఖb
+หྟ
+• USB ಆ෎ѓሙ
+• ॖ஥ᇂູ൐ႨESP32-S3 ଽ҆USB PHYݖGPIOइᆔ൐Ⴈຓ҆PHY
+•֥ࢤCDC-ACMބJTAGି
+•܋2۱OUTa3۱INބׄ؊1ׄ؊EP_0đॖൌགྷቋն64ހ
+•ଽ҆PHYࠏ
+•CDC-ACMႨ
+• JTAG֥JTAG ᆷ਷ൌགྷაCPUॹ෎๙ྐ
+• CDC-ACMೆ༯ᄛଆൔ
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫUSB Ա१/JTAG ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1.9 SD/MMC॥ᇅఖ
+ESP32-S3۱SD/MMC॥ᇅఖb
+หྟ
+• SD व3.0ބ3.01 ϱЧ
+• SDIO 3.0ϱЧ
+• CE-ATA 1.1ϱЧ
+࠯21
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 22 =====
+5 ຓഡ
+•ૂุवčMMC 4.41ϱЧaeMMC 4.5ބ4.51 ϱЧĎ
+•ղ80 MHzൈᇒൻԛ
+• 3 ᇕඔऌሹཌଆൔğ
+– 1 ໊
+– 4۱SD/SDIO/MMC 4.41ၛ1.8 V֥SD वĎ
+– 8 ໊
+ඪૼğ
+ᄝ 80 MHzᆦӻ 0°ބ180° ਆᇕཌྷ໊஥ᇂbPCBཋ
+ᇅđၛಒЌൈ྽൬৻b
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫSD/MMC॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1. 10 LED PWM ॥ᇅఖ
+LED PWMඔሳѯྙb
+หྟ
+•ᇛ௹ູ1 msॖղ14 ໊
+•ᇕൈᇒჷ࿊ᄴđЇওğAPBᆒൈᇒ
+• ॖᄝLight-sleepቔ
+•ഒᅝॢбđॖႨႿLED RGBളఖ
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫLED PWM ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1. 11ᇅఖ (MCPWM)
+ESP32-S3۱MCPWM۱MCPWM௔ఖ
+۱PWM۱PWMѽሚଆॶbPWMൈҕॉbPWM Ҡ
+஥ᇂđ಩၂PWM Ҡቔఖॖၛ൐Ⴈ಩၂PWMൈҕॉb҂
+֥PWM֥PWMൈҕॉটӁളPWM֥PWM Ҡቔఖ္ॖ
+֥PWM֥׿PWM֥PWMྛ๝҄b
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫᇅఖb
+࠯22
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 23 =====
+5 ຓഡ
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1. 12ຓဪ॥ (RMT)
+ຓဪ॥(RMT)൬b
+หྟ
+•ෂ
+•൬
+•ෂ
+• RMTཚ384 x 32-bit֥RAM
+•ᇅ
+•טࢳ
+•ෂଆൔ
+•൬ଆൔ
+•ෂ
+•֡3 ᆦӻDMA໙
+•֡7 ᆦӻDMA໙
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫຓဪ॥b
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2. 1. 13ඔ॥ᇅఖ (PCNT)
+ඔఖ(PCNT)ඔb
+หྟ
+•ຶ൞1 ~65535
+•ඔ॥ᇅఖ
+•čೂsig_ch0_unčೂctrl_ch0_unĎ
+•čsig_ch0_unބsig_ch1_unčctrl_ch0_unބ
+ctrl_ch1_unરՏ
+•ҕඔೂ༯ğ
+1.ඔ
+2.ඔ
+࠯23
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 24 =====
+5 ຓഡ
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫඔ॥ᇅఖb
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2.2ԩ৘
+b
+5.2.2. 1 SAR ADC
+ESP32-S3۱12 ໊SAR ADCᆦӻ20đESP32-S3֥ULP ླྀ
+ྜCPUb
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫԩ৘b
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+5.2.2.2ఖ
+࿢bଽ҆ADCඔሳਈb
+ຶູ⚶40 °C֞125 °Cෛሢັ॥
+ࠇIOb
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫԩ৘b
+5.2.2.3ఖ
+ESP32-S3ղ14ۋGPIOಸҵၳb
+ᇏ္ॖၛ൐ႨԨଃϰᆔਙ
+bESP32-S3֥
+ྟିb
+ඪૼğ
+ESP32-S3ҩ൫༢๤(CS)Ⴕ෮ཋᇅb
+ྐ༏đ౨ҕॉ uESP32-S3ඌҕॉ൭Ҩv>ࢫԩ৘b
+஥
+࡮uESP32-S3඀v>ࢫ஥b
+࠯24
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 25 =====
+6గหྟ
+6గหྟ
+6. 1ᆴ
+ӑԛі6-1ᆴ༯
+ӑԛі6-2ࡱॖ
+ौྟb
+і 6-1.ᆴ
+ݼژҕඔ ቋཬᆴ ቋնᆴ ֆ໊
+VDD33࿢ ⚶0.3 3.6 V
+TST ORE؇⚶40 105 °C
+6.2ࡱ
+і 6-2.ࡱ
+ݼژҕඔ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+VDD33࿢ 3.0 3.3 3.6 V
+IV DDੀ 0.5 — — A
+TA؇⚶40 — 65 °C
+6.3గหྟ (3.3 V , 25 °C)
+і 6-3.గหྟ (3.3 V , 25 °C)
+ҕඔ ඪૼ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+CINಸ — 2 — pF
+VIH࿢ 0.75 × VDD1 — VDD1 + 0.3 V
+VIL࿢ ⚶0.3 — 0.25 × VDD1 V
+IIHੀ — — 50 nA
+IILੀ — — 50 nA
+VOH 2࿢ 0.8 × VDD1 — — V
+VOL 2࿢ — — 0.1 × VDD1 V
+IOH
+ੀ(VDD 1 = 3.3 V, VOH >= 2.64 V,
+PAD_DRIVER = 3) — 40 — mA
+IOL
+ੀ(VDD 1 = 3.3 V, VOL = 0.495 V,
+PAD_DRIVER = 3) — 28 — mA
+RP Uቅ — 45 — kΩ
+RP Dቅ — 45 — kΩ
+VIH_nRST࿢čENຶĎ 0.75 × VDD1 — VDD1 + 0.3 V
+VIL_nRST࿢čENຶĎ ⚶0.3 — 0.25 × VDD1 V
+1 VDD –࿢b
+2VOHބVOLҩ൫ᆴb
+࠯25
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 26 =====
+6గหྟ
+6.4หྟ
+6.4. 1 Activeݻۿ֥
+࡮
+uESP32-S3඀v>৘ֆჭb
+Ⴟ3.3 Vჷa25 °Cb
+Ⴟ100%b
+оaCPUb
+і 6-4. Activeݻۿ
+ቔଆൔ ૭ඍᆴ (mA)
+ActiveቔĎ
+TX
+802.11b, 1 Mbps, @20.5 dBm 355
+802.11g, 54 Mbps, @18 dBm 297
+802.11n, HT20, MCS7, @17.5 dBm 286
+802.11n, HT40, MCS7, @17 dBm 285
+RX 802.11b/g/n, HT20 95
+802.11n, HT40 97
+ඪૼğ
+ၛ༯ଽಸᅋሱ uESP32-S3඀v֥ݻۿ֥b
+6.4.2ݻۿ֥
+ልଽႵPSRAMႿ༯іඔऌb
+࠯26
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 27 =====
+6గหྟ
+і 6-5. Modem-sleepݻۿ֥
+ቔଆൔ
+௔ੱ
+(MHz) ඪૼ
+྘ᆴ1
+(mA)
+྘ᆴ2
+(mA)
+Modem-sleep3
+40
+WAITIनॢ༽Ď 13.2 18.8
+ᆳྛ32ॢ༽ 16.2 21.8
+ᆳྛ32໙ᆷ਷ 18.7 24.4
+ᆳྛ128ॢ༽ 19.9 25.4
+ᆳྛ128໙ᆷ਷ 23.0 28.8
+80
+WAITI 22.0 36.1
+ᆳྛ32ॢ༽ 28.4 42.6
+ᆳྛ32໙ᆷ਷ 33.1 47.3
+ᆳྛ128ॢ༽ 35.1 49.6
+ᆳྛ128໙ᆷ਷ 41.8 56.3
+160
+WAITI 27.6 42.3
+ᆳྛ32ॢ༽ 39.9 54.6
+ᆳྛ32໙ᆷ਷ 49.6 64.1
+ᆳྛ128ॢ༽ 54.4 69.2
+ᆳྛ128໙ᆷ਷ 66.7 81.1
+240
+WAITI 32.9 47.6
+ᆳྛ32ॢ༽ 51.2 65.9
+ᆳྛ32໙ᆷ਷ 66.2 81.3
+ᆳྛ128ॢ༽ 72.4 87.9
+ᆳྛ128໙ᆷ਷ 91.7 107.9
+1 ෮Ⴕຓഡൈᇒо྘ᆴb
+2 ෮ႵຓഡൈᇒյषႵ෮ҵၳb
+3Modem-sleep ଆൔ༯đWi-Fi໙flashb೏flash ෎ੱູ80 Mbit/sđ
+SPI චཌଆൔ༯flashູ10 mAb
+і 6-6.ݻۿ֥
+ቔଆൔ ඪૼ྘ᆴ (µA)
+Light-sleep1 VDD_SPIބWi-Fiđ෮ႵGPIOቅሑ෿ 240
+Deep-sleep
+ULP ླྀԩ৘ఖԩႿ
+ቔሑ෿2
+ULP-FSM 170
+ULP-RISC-V 190
+ҩଆൔ3 18
+RTCބRTC׈8
+RTCđRTC׈ו7
+о ENо 1
+1 Light-sleep ଆൔ༯đSPIልଽႵ PSRAMཌྷ
+֥PSRAMğ8MB8 ཌPSRAM(3.3V) ູ140 µAĠ8MB8 ཌPSRAM(1.8V) ູ200 µAĠ
+2 MB 4ཌPSRAM ູ40 µAb
+2Deep-sleepࣇULPቔሑ෿ൈđॖၛҠቔGPIOݻۿ֮ࠣI2Cb
+3ҩଆൔൈđULPఖၛ1%
+྘ᆴູ18 µAb
+࠯27
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 28 =====
+6గหྟ
+6.5۬ܿ
+ބ؍ࢨ࠹/ࣉ
+ྛಆ૫ҩ൫bഡСԛӌൈđթԥఖनູ҈Ԣሑ෿b
+і 6-7. Flash۬ܿ
+ҕඔ ඪૼ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+VCC࿢(1.8 V) 1.65 1.80 2.00 V
+࿢(3.3 V) 2.7 3.3 3.6 V
+FC ቋնൈᇒ௔ੱ 80 — — MHz
+— щӱ/҈Ԣᇛ௹ 100,000 — — Ց
+TRETࡗ20 — — ୍
+TP Pࡗ— 0.8 5 ms
+TSEࡗ4 KB) — 70 500 ms
+TBE 1ࡗ32 KB) — 0.2 2 s
+TBE 2ࡗ64 KB) — 0.3 3 s
+TCE
+ࡗ16 Mb) — 7 20 s
+ࡗ32 Mb) — 20 60 s
+ࡗ64 Mb) — 25 100 s
+ࡗ128 Mb) — 60 200 s
+ࡗ256 Mb) — 70 300 s
+і 6-8. PSRAM۬ܿ
+ҕඔ ඪૼ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+VCC࿢(1.8 V) 1.62 1.80 1.98 V
+࿢(3.3 V) 2.7 3.3 3.6 V
+FC ቋնൈᇒ௔ੱ 80 — — MHz
+࠯28
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 29 =====
+7 ഝ௔หྟ
+7 ഝ௔หྟ
+ഝ௔หྟіb
+b
+ຶđऎุ౨ҕ
+ॉuESP ഝ௔ҩ൫ᆷଲvb
+หљඪૼđഝ௔ҩ൫न൞ᄝ3.3 V (±5%)ჷa25 °C༯ປӮb
+7 . 1 Wi-Fi ഝ௔
+і 7-1. Wi-Fi۬ܿ
+଀ӫ ૭ඍ
+ຶ 2412 ~2484 MHz
+໭ཌѓሙ IEEE 802.11b/g/n
+7 . 1. 1Wi-Fiഝఖ (TX) หྟ
+і 7-2.ބEVMކژ802. 11ੱ
+ቋཬᆴ྘ᆴ ቋնᆴ෎ੱ (dBm) (dBm) (dBm)
+802.11b, 1 Mbps — 20.5 —
+802.11b, 11 Mbps — 20.5 —
+802.11g, 6 Mbps — 20.0 —
+802.11g, 54 Mbps — 18.0 —
+802.11n, HT20, MCS 0 — 19.0 —
+802.11n, HT20, MCS 7 — 17.5 —
+802.11n, HT40, MCS 0 — 18.5 —
+802.11n, HT40, MCS 7 — 17.0 —
+і 7-3.ഝ EVM ҩ൫1
+ቋཬᆴ྘ᆴ ѓሙཋᆴ෎ੱ (dB) (dB) (dB)
+802.11b, 1 Mbps, @20.5 dBm — ⚶24.5 ⚶10
+802.11b, 11 Mbps, @20.5 dBm — ⚶24.5 ⚶10
+802.11g, 6 Mbps, @20 dBm — ⚶23.0 ⚶5
+802.11g, 54 Mbps, @18 dBm — ⚶29.5 ⚶25
+802.11n, HT20, MCS 0, @19 dBm — ⚶24.0 ⚶5
+802.11n, HT20, MCS 7, @17.5 dBm — ⚶30.5 ⚶27
+802.11n, HT40, MCS 0, @18.5 dBm — ⚶25.0 ⚶5
+༯်
+࠯29
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 30 =====
+7 ഝ௔หྟ
+і 7-3 –ഈ်
+ቋཬᆴ྘ᆴ ѓሙཋᆴ෎ੱ (dB) (dB) (dB)
+802.11n, HT40, MCS 7, @17 dBm — ⚶30.0 ⚶27
+1ഝEVMੱູі7-2ބEVMژ
+ކ802. 11ੱ྘ᆴb
+7 . 1.2 Wi-Fi൬ఖ (RX) หྟ
+802.11b༂Їੱ(PER)ݖ8%đ802.11g/nݖ10%b
+і 7-4.؇
+ቋཬᆴ྘ᆴ ቋնᆴ෎ੱ (dBm) (dBm) (dBm)
+802.11b, 1 Mbps — ⚶98.2 —
+802.11b, 2 Mbps — ⚶95.6 —
+802.11b, 5.5 Mbps — ⚶92.8 —
+802.11b, 11 Mbps — ⚶88.5 —
+802.11g, 6 Mbps — ⚶93.0 —
+802.11g, 9 Mbps — ⚶92.0 —
+802.11g, 12 Mbps — ⚶90.8 —
+802.11g, 18 Mbps — ⚶88.5 —
+802.11g, 24 Mbps — ⚶85.5 —
+802.11g, 36 Mbps — ⚶82.2 —
+802.11g, 48 Mbps — ⚶78.0 —
+802.11g, 54 Mbps — ⚶76.2 —
+802.11n, HT20, MCS 0 — ⚶93.0 —
+802.11n, HT20, MCS 1 — ⚶90.6 —
+802.11n, HT20, MCS 2 — ⚶88.4 —
+802.11n, HT20, MCS 3 — ⚶84.8 —
+802.11n, HT20, MCS 4 — ⚶81.6 —
+802.11n, HT20, MCS 5 — ⚶77.4 —
+802.11n, HT20, MCS 6 — ⚶75.6 —
+802.11n, HT20, MCS 7 — ⚶74.2 —
+802.11n, HT40, MCS 0 — ⚶90.0 —
+802.11n, HT40, MCS 1 — ⚶87.5 —
+802.11n, HT40, MCS 2 — ⚶85.0 —
+802.11n, HT40, MCS 3 — ⚶82.0 —
+802.11n, HT40, MCS 4 — ⚶78.5 —
+802.11n, HT40, MCS 5 — ⚶74.4 —
+802.11n, HT40, MCS 6 — ⚶72.5 —
+802.11n, HT40, MCS 7 — ⚶71.2 —
+࠯30
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 31 =====
+7 ഝ௔หྟ
+і 7-5.௜
+ቋཬᆴ྘ᆴ ቋնᆴ෎ੱ (dBm) (dBm) (dBm)
+802.11b, 1 Mbps — 5 —
+802.11b, 11 Mbps — 5 —
+802.11g, 6 Mbps — 5 —
+802.11g, 54 Mbps — 0 —
+802.11n, HT20, MCS 0 — 5 —
+802.11n, HT20, MCS 7 — 0 —
+802.11n, HT40, MCS 0 — 5 —
+802.11n, HT40, MCS 7 — 0 —
+і 7-6.ၝᇅ
+ቋཬᆴ྘ᆴ ቋնᆴ෎ੱ (dB) (dB) (dB)
+802.11b, 1 Mbps — 35 —
+802.11b, 11 Mbps — 35 —
+802.11g, 6 Mbps — 31 —
+802.11g, 54 Mbps — 14 —
+802.11n, HT20, MCS 0 — 31 —
+802.11n, HT20, MCS 7 — 13 —
+802.11n, HT40, MCS 0 — 19 —
+802.11n, HT40, MCS 7 — 8 —
+7 .2ড࿩ഝ௔
+і 7-7.۬ܿ
+଀ӫ ૭ඍ
+ຶ 2402 ~2480 MHz
+ຶ ⚶24.0 ~20.0 dBm
+7 .2. 1ഝఖ (TX) หྟ
+і 7-8.ড࿩ -ഝఖหྟ - 1 Mbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+௎၍
+|fn|n=0, 1, 2, ..k ቋնᆴ — 2.50 — kHz
+|f0 − fn| ቋնᆴ — 2.00 — kHz
+|fn − fn−5| ቋնᆴ — 1.40 — kHz
+|f1 − f0| — 1.00 — kHz
+༯်
+࠯31
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 32 =====
+7 ഝ௔หྟ
+і 7-8 –ഈ်
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+ᇅหྟ
+∆ f 1avg — 249.00 — kHz
+∆ f 2max ቋཬᆴ
+čᇀഒ99.9%֥∆ f 2maxĎ — 198.00 — kHz
+∆ f 2avg/∆ f 1avg — 0.86 — —
+ഝ
+± 2 MHzொ၍ — ⚶37.00 — dBm
+± 3 MHzொ၍ — ⚶42.00 — dBm
+> ± 3 MHzொ၍ — ⚶44.00 — dBm
+і 7-9.ড࿩ -ഝఖหྟ - 2 Mbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+௎၍
+|fn|n=0, 1, 2, ..k ቋնᆴ — 2.50 — kHz
+|f0 − fn| ቋնᆴ — 2.00 — kHz
+|fn − fn−5| ቋնᆴ — 1.40 — kHz
+|f1 − f0| — 1.00 — kHz
+ᇅหྟ
+∆ f 1avg — 499.00 — kHz
+∆ f 2max ቋཬᆴ
+čᇀഒ99.9%֥∆ f 2maxĎ — 416.00 — kHz
+∆ f 2avg/∆ f 1avg — 0.89 — —
+ഝ
+± 4 MHzொ၍ — ⚶42.00 — dBm
+± 5 MHzொ၍ — ⚶44.00 — dBm
+> ± 5 MHzொ၍ — ⚶47.00 — dBm
+і 7-10.ড࿩ -ഝఖหྟ - 125 Kbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+௎၍
+|fn|n=0, 1, 2, ..k ቋնᆴ — 0.80 — kHz
+|f0 − fn| ቋնᆴ — 1.00 — kHz
+|fn − fn−3| — 0.30 — kHz
+|f0 − f3| — 1.00 — kHz
+ᇅหྟ
+∆ f 1avg — 248.00 — kHz
+∆ f 1max ቋཬᆴ
+čᇀഒ99.9%֥∆ f 1maxĎ — 222.00 — kHz
+ഝ
+± 2 MHzொ၍ — ⚶37.00 — dBm
+± 3 MHzொ၍ — ⚶42.00 — dBm
+> ± 3 MHzொ၍ — ⚶44.00 — dBm
+і 7-11.ড࿩ -ഝఖหྟ - 500 Kbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+௎၍
+|fn|n=0, 1, 2, ..k ቋնᆴ — 0.80 — kHz
+|f0 − fn| ቋնᆴ — 1.00 — kHz
+|fn − fn−3| — 0.85 — kHz
+|f0 − f3| — 0.34 — kHz
+༯်
+࠯32
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 33 =====
+7 ഝ௔หྟ
+і 7-11 –ഈ်
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+ᇅหྟ
+∆ f 2avg — 213.00 — kHz
+∆ f 2max ቋཬᆴ
+čᇀഒ99.9%֥∆ f 2maxĎ — 196.00 — kHz
+ഝ
+± 2 MHzொ၍ — ⚶37.00 — dBm
+± 3 MHzொ၍ — ⚶42.00 — dBm
+> ± 3 MHzொ၍ — ⚶44.00 — dBm
+7 .2.2൬ఖ (RX) หྟ
+і 7-12.ড࿩ -൬ఖหྟ - 1 Mbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+؇30.8% PER — — ⚶96.5 — dBm
+ݼ30.8% PER — — 8 — dBm
+ၝᇅбC/I F = F0 MHz — 9 — dB
+࿊ᄴྟၝᇅбC/I
+F = F0 + 1 MHz — ⚶3 — dB
+F = F0 – 1 MHz — ⚶3 — dB
+F = F0 + 2 MHz — ⚶28 — dB
+F = F0 – 2 MHz — ⚶30 — dB
+F = F0 + 3 MHz — ⚶31 — dB
+F = F0 – 3 MHz — ⚶33 — dB
+F >F0 + 3 MHz — ⚶32 — dB
+F >F0 – 3 MHz — ⚶36 — dB
+ཞ௔ੱ — — ⚶32 — dB
+ಠ F = Fimage + 1 MHz — ⚶39 — dB
+F = Fimage – 1 MHz — ⚶31 — dB
+ջຓቅೖ
+30 MHz~2000 MHz — ⚶9 — dBm
+2003 MHz~2399 MHz — ⚶18 — dBm
+2484 MHz~2997 MHz — ⚶15 — dBm
+3000 MHz~12.75 GHz — ⚶5 — dBm
+ט޺— —⚶29 — dBm
+і 7-13.ড࿩ -൬ఖหྟ - 2 Mbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+؇30.8% PER — — ⚶92.5 — dBm
+ݼ30.8% PER — — 3 — dBm
+ಠC/I F = F0 MHz — 10 — dB
+࿊ᄴྟၝᇅбC/I
+F = F0 + 2 MHz — ⚶8 — dB
+F = F0 – 2 MHz — ⚶5 — dB
+F = F0 + 4 MHz — ⚶31 — dB
+F = F0 – 4 MHz — ⚶33 — dB
+F = F0 + 6 MHz — ⚶37 — dB
+༯်
+࠯33
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 34 =====
+7 ഝ௔หྟ
+і 7-13 –ഈ်
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+F = F0 – 6 MHz — ⚶37 — dB
+F >F0 + 6 MHz — ⚶40 — dB
+F >F0 – 6 MHz — ⚶40 — dB
+ཞ௔ੱ — — ⚶31 — dB
+ಠ F = Fimage + 2 MHz — ⚶37 — dB
+F = Fimage – 2 MHz — ⚶8 — dB
+ջຓቅೖ
+30 MHz~2000 MHz — ⚶15 — dBm
+2003 MHz~2399 MHz — ⚶19 — dBm
+2484 MHz~2997 MHz — ⚶15 — dBm
+3000 MHz~12.75 GHz — ⚶6 — dBm
+ט޺— —⚶29 — dBm
+і 7-14.ড࿩ -൬ఖหྟ - 125 Kbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+؇30.8% PER — — ⚶103.5 — dBm
+ݼ30.8% PER — — 8 — dBm
+ၝᇅбC/I F = F0 MHz — 6 — dB
+࿊ᄴྟၝᇅбC/I
+F = F0 + 1 MHz — ⚶6 — dB
+F = F0 – 1 MHz — ⚶5 — dB
+F = F0 + 2 MHz — ⚶32 — dB
+F = F0 – 2 MHz — ⚶39 — dB
+F = F0 + 3 MHz — ⚶35 — dB
+F = F0 – 3 MHz — ⚶45 — dB
+F >F0 + 3 MHz — ⚶35 — dB
+F >F0 – 3 MHz — ⚶48 — dB
+ཞ௔ੱ — — ⚶35 — dB
+ಠ F = Fimage + 1 MHz — ⚶49 — dB
+F = Fimage – 1 MHz — ⚶32 — dB
+і 7-15.ড࿩ -൬ఖหྟ - 500 Kbps
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+؇30.8% PER — — ⚶100 — dBm
+ݼ30.8% PER — — 8 — dBm
+ၝᇅбC/I F = F0 MHz — 4 — dB
+࿊ᄴྟၝᇅбC/I
+F = F0 + 1 MHz — ⚶5 — dB
+F = F0 – 1 MHz — ⚶5 — dB
+F = F0 + 2 MHz — ⚶28 — dB
+F = F0 – 2 MHz — ⚶36 — dB
+F = F0 + 3 MHz — ⚶36 — dB
+༯်
+࠯34
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 35 =====
+7 ഝ௔หྟ
+і 7-15 –ഈ်
+ҕඔ ૭ඍ ቋཬᆴ྘ᆴ ቋնᆴ ֆ໊
+F = F0 – 3 MHz — ⚶38 — dB
+F >F0 + 3 MHz — ⚶37 — dB
+F >F0 – 3 MHz — ⚶41 — dB
+ཞ௔ੱ — — ⚶37 — dB
+ಠ F = Fimage + 1 MHz — ⚶44 — dB
+F = Fimage – 1 MHz — ⚶28 — dB
+࠯35
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 36 =====
+8 ଆቆჰ৘๭8 ଆቆჰ৘๭
+ਫ਼๭bESP32-S3R8VބESP32-S3R16V֥VDD_SPIݖeFuse VDD_SPI_TIEHބVDD_SPI_FORCE ഡᇂູ1.8 Vb
+5
+5
+4
+4
+3
+3
+2
+2
+1
+1
+D D
+C C
+B B
+A A
+The values of L3, C16, C11, L2 and C12
+vary with the actual PCB board.
+The values of C1 and C4 vary with
+the selection of the crystal.
+The value of R4 varies with the
+actual PCB board. R4 could be a
+resistor or inductor, the initial
+value is suggested to be 24 nH.
+ESP32-S3-WROOM-2(pin-out)
+NC: No component.
+50 ohm Impedance Control
+ESP32-S3R16V
+ESP32-S3R8V
+VDD_SPI
+VDD33
+GND GND GND
+VDD33
+GND GND GND
+GND
+VDD33
+GND
+GND
+GND
+GND
+GND
+GND
+VDD33
+VDD33
+VDD33
+GND
+GND
+GNDGND
+GND GND
+VDD_SPI
+VDD_SPI
+GND
+GND
+GND
+GND
+VDD33
+Title
+Size Page Name Rev
+Date: Sheet
+of
+Confidential and Proprietary<02_ESP32-S3-WROOM-2> V1.3
+<ESP32-S3-WROOM-2>
+A4
+2 2Monday, December 02, 2024
+Title
+Size Page Name Rev
+Date: Sheet
+of
+Confidential and Proprietary<02_ESP32-S3-WROOM-2> V1.3
+<ESP32-S3-WROOM-2>
+A4
+2 2Monday, December 02, 2024
+Title
+Size Page Name Rev
+Date: Sheet
+of
+Confidential and Proprietary<02_ESP32-S3-WROOM-2> V1.3
+<ESP32-S3-WROOM-2>
+A4
+2 2Monday, December 02, 2024
+C13
+0.1uF
+R4 0
+C3
+1uF
+ESP32-S3-WROOM-2
+GND1
+3V32
+EN3
+IO44
+IO55
+IO66
+IO77
+IO158
+IO169
+IO1710
+IO1811
+IO1913
+IO2014
+IO812
+GND 40
+IO1 39
+IO2 38
+TXD0 37
+RXD0 36
+IO42 35
+IO41 34
+IO40 33
+IO39 32
+IO38 31
+NC 30
+NC 29
+NC 28
+IO0 27
+IO46 16 
+IO9 17 
+IO10 18 
+IO11 19 
+IO12 20 
+IO13 21 
+IO14 22 
+IO21 23 
+IO47 24 
+IO48 25 
+IO3 15 
+IO45 26 
+EPAD 41
+R16 0
+L1 2.0nH(0.1nH)
+C4
+TBD
+R7 0
+U2 FLASH_1V8
+CS#C2
+RESET#A4
+DQSC3
+NC3 B1
+SCLKB2 NC1 A2
+NC2 A3
+WP# C5NC4 B5
+ECS#A5
+SI(IO0)D3
+SO(IO1)D2
+IO2C4
+IO3D4
+IO5E3
+IO7E1
+IO4D5
+IO6E2
+VCC B4
+VCC D1
+VCC E4
+VSS E5VSS C1VSS B3
+C9
+0.1uF
+C1
+TBD
+C14
+1uF
+ANT1
+PCB_ANT
+1
+2
+C8
+0.1uF
+R6 0
+R9 0
+C7
+1uF
+C6
+10uF
+R14 0
+C10
+0.1uF
+R15 0
+Y1
+40MHz(±10ppm)
+XIN 1
+GND 2XOUT 3
+GND 4
+L3
+TBD
+R8 0
+R5 0L2 TBD
+R1
+10K(NC)
+C16
+TBD
+C2
+10nF
+U1
+VDDA 56 
+LNA_IN1
+VDD3P32
+VDD3P33
+GPIO05
+GPIO16
+GPIO27
+GPIO38
+GPIO49
+GPIO510
+GPIO611
+GPIO712
+GPIO10 15 
+GPIO11 16 
+GPIO12 17 
+GPIO13 18 
+GPIO14 19 
+XTAL_32K_P 21 VDD3P3_RTC 20 
+XTAL_32K_N 22 
+GPIO17 23 
+GPIO18 24 
+GPIO19 25 
+GPIO20 26 
+VDD_SPI 29
+SPIWP 31SPICS0 32
+SPIQ 34SPID 35
+SPICLK 33
+SPICLK_N 36
+GND 57 
+SPICLK_P 37GPIO33 38
+GPIO38 43 
+GPIO46 52 XTAL_N 53 XTAL_P 54 
+MTMS 48 
+MTDO 45 
+U0TXD 49 
+VDD3P3_CPU 46 
+CHIP_PU4
+VDDA 55 
+MTDI47 
+GPIO813
+GPIO914
+GPIO21 27 
+SPICS1 28 
+SPIHD 30
+GPIO34 39GPIO35 40GPIO36 41
+U0RXD 50 GPIO45 51 
+GPIO37 42
+MTCK 44 
+C12
+TBD
+R12
+10K
+D1
+ESD
+R11
+10K
+R10 0
+R3 499
+R13 0
+C15
+0.1uF
+C11
+TBD
+SPI_CS0
+LNA_INRF_ANT
+SPI_CLK
+SPI_Q
+SPI_WP
+SPI_HD
+GPIO21 
+GPIO45
+U0TXD
+GPIO46
+GPIO38
+GPIO40
+GPIO41
+GPIO42
+U0RXD
+GPIO39
+GPIO47
+GPIO48
+SPI_D
+GPIO0
+GPIO1
+GPIO2
+GPIO3
+GPIO4
+GPIO5
+GPIO6
+GPIO7
+GPIO8
+GPIO9
+CHIP_PU
+GPIO20 
+GPIO19 
+GPIO18 
+GPIO17 
+GPIO16 
+GPIO15 
+GPIO14 
+GPIO13 
+GPIO12 
+GPIO11 
+GPIO10 
+CHIP_PU
+GPIO4
+GPIO5
+GPIO6
+GPIO7
+GPIO15
+GPIO16
+GPIO17
+GPIO18
+GPIO3 
+GPIO21 
+GPIO46 
+GPIO9 
+GPIO10 
+GPIO11 
+GPIO12 
+GPIO13 
+GPIO14 
+GPIO45 
+GPIO47 
+GPIO48 
+GPIO0
+GPIO38
+GPIO39
+GPIO40
+GPIO41
+GPIO42
+U0RXD
+U0TXD
+GPIO2
+GPIO1
+GPIO8
+GPIO19
+GPIO20
+SPI_CLK
+SPI_HD
+SPI_CS0
+SPI_D
+SPI_WP
+SPI_Q
+SPI_IO4
+SPI_IO5
+SPI_IO6
+SPI_IO7
+SPI_DQS
+SPI_DQS
+SPI_IO4
+SPI_IO5
+SPI_IO6
+SPI_IO7
+๭ 8-1. ჰ৘๭
+౨ᇿၩđՖBOM v0.7ष൓đESP32-S3-WROOM-2 GPIO45ቅR1bབྷ༥ྐ༏౨ҕॉESP32-S3-WROOM-2 ଆቆਈӁBOM۷b
+࠯36
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 37 =====
+9ჰ৘๭
+9ჰ৘๭
+໊ο୦aJTAG१aUARTਫ਼๭b
+5
+5
+4
+4
+3
+3
+2
+2
+1
+1
+D D
+C C
+B B
+A A
+NC: No component.
+X1: ESR = Max. 70 Kȍ
+IO47/IO48 operates in the 1.8V voltage domain.
+EN
+IO42 TMS
+IO41 TDI
+IO38
+IO40 TDO
+IO39 TCK
+TXD0
+RXD0
+IO48
+IO47
+IO12
+IO13
+IO3
+IO6
+IO7
+IO9
+IO10
+IO11
+IO15
+IO16
+IO14
+IO21
+IO17
+IO18
+USB_D-
+USB_D+
+IO1
+IO2
+IO45
+IO4
+IO5
+IO0
+EN
+IO19
+IO20
+IO46
+IO8
+GND
+GND GND
+VDD33 GND GND
+GND
+GND
+GND
+VDD33
+GNDGND
+GND
+GND
+C4 12pF(NC)
+SW1
+JP4
+Boot Option
+11 22
+C3
+0.1uF
+U1
+ESP32-S3-WROOM-2
+GND1
+3V32
+EN3
+IO44
+IO55
+IO66
+IO77
+IO158
+IO169
+IO1710
+IO1811
+IO1913
+IO2014
+IO812
+GND 40
+IO1 39
+IO2 38
+TXD0 37
+RXD0 36
+IO42 35
+IO41 34
+IO40 33
+IO39 32
+IO38 31
+NC 30
+NC 29
+NC 28
+IO0 27
+IO4616
+IO917
+IO1018
+IO1119
+IO1220
+IO1321
+IO1422
+IO2123
+IO4724
+IO4825
+IO315
+IO4526
+EPAD 41
+R4 0
+R7 0
+C2 TBD
+X1
+32.768KHz(NC)
+12
+R2 NC
+C5
+TBD
+R1 TBD
+R5 0(NC)
+JP1
+UART
+11
+22
+33
+44
+R3 0(NC)
+C1
+22uF
+C8 0.1uF
+R6 0
+JP3
+USB OTG
+1 1
+2 2
+JP2
+JTAG
+11
+22
+33
+44
+C6
+TBD
+C7 12pF(NC)
+๭ 9-1.ჰ৘๭
+• EPAD֥GNDࡼEPADָ֞ࢤݯ
+b
+• ູಒЌESP32-S3ᆞӈđENࡆRCਫ਼bRCၰູR = 10 kΩđ
+C = 1µFᆜbESP32-S3֥
+ࢫ4.5໊b
+࠯37
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 38 =====
+10 ଆቆԄժ
+10 ଆቆԄժ
+25.5±0.21.51.2716.5140 x 0.9
+40 x 0.93.1±0.15Top ViewSide ViewBottom View18±0.217.640 x 0.4511.050.840 x 0.850.544140 x Ø0.55ESP32-S3-WROOM-2U Dimensions6 1Unit: mm13.971.272.015
+1.51.2716.5140 x 0.9Top ViewBottom View18±0.240 x 0.4540 x 0.850.544111.515.817.61Side View40 x 0.9
+19.2±0.240 x Ø0.550.811.052.462.491.273.2±0.15Unit: mm13.972.015
+13.2
+12.667.64Ø0.515.8
+Ø0.57.6412.66
+๭ 10-1. ଆቆԄժ
+ඪૼğ
+ྐ༏đ౨ҕᄇ uESP32-S3 ଆቆЇልྐ༏vb
+࠯38
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 39 =====
+11 PCBၰ
+11 PCBၰ
+11. 1 PCBል๭ྙ
+ଢ଼ҕॉğ
+•ࡩPCBል๭đѓႵPCB๭11-1ࡩPCBል๭b
+•ࡩPCBđႨႿҩਈ๭11-1Ԅժbଢ଼ॖႨAutodeskViewer Ұु
+ESP32-S3-WROOM-2b
+• ESP32-S3-WROOM-2֥3D֥3D ଆ྘ູ.STEPࡆ߶txt
+ሗĎ b
+Antenna Area11526401825.540 x1.540 x0.91.541147.641.2760.5Unit: mmCopperVia for thermal pad7.490.50.52.0152.0151.2717.512.6616.51
+๭ 11-1.ࡩPCBል๭
+࠯39
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 40 =====
+11 PCBၰ
+11.2 PCB٢
+ྛon-boardଆቆPCB ฿ཌ
+႕ཙb
+ႿPCBྐ༏đ౨ҕॉ uESP32-S3ᆷଲv>ࢫ࠹
+ׄb
+࠯40
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 41 =====
+12 Ӂ௖ԩ৘
+12 Ӂ௖ԩ৘
+12. 1ࡱ
+Ӗտ(MBB)Ӂ௖ႋԥթᄝ< 40 °C/90%RHᇏb
+ࠩ֩؇ۋMSL ູ3b
+đ ᄝ25±5°C a60%RH ༯đ сྶᄝ168Ցഈཌb
+12.2׈٢׈࣡ESD)
+•ଆൔ(HBM)ğ±2000 V
+•ଆൔ(CDM)ğ±500 V
+12.3౷ཌ
+b
+50 1000
+150
+200
+250
+200
+100
+50
+150 250
+   
+217
+25
+180
+230
+升温区
+25 – 150 °C
+60 – 90 s
+1 – 3 °C/s
+预热区
+150 – 200 °C
+60 – 120 s
+焊接区
+＞ 217 °C
+60 – 90 s
+冷却区
+＜ 180 °C
+–5 ~ –1 °C/s
+温度 (°C)
+时间 (s)
+峰值温度：235 – 250 °C
+峰值时间：30 – 70 s
+焊接时间：＞ 30 s
+焊料：锡银铜合⾦⽆铅焊料 (SAC/three.case/zero.case/five.case)
+๭ 12-1.౷ཌ
+࠯41
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 42 =====
+12 Ӂ௖ԩ৘
+12.4׮
+ॖିაଆቆ
+ᅰമᇀാਲđ߄b
+࠯42
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 43 =====
+৘
+৘
+඀ϱЧ ሑ෿ ඣႆၬ
+v0.1 ~ v0.5č҂
+Їওv0.5Ď۠Confidentialđ
+đඖ҂ਸ਼ྛ๙ᆩb
+v0.5 ~ v1.0č҂
+Їওv1.0Ď
+Ԛ҄
+҃ Preliminary
+ႋӁ௖ԩႿဒᆣ
+੣ᄝ
+৥ൎᇏb
+v1.0ϱЧ ᆞൔ
+҃ —
+ႋӁ௖ၘਈӁđӁ
+ݖ
+๙ᆩ(PCN)ྛ๙ᆩb
+಩ၩϱЧ —࠹NRND)1Ⴈ
+b
+಩ၩϱЧ — ๔Ӂ(EOL)2ႋӁ௖ၘ๔Ӂb
+1ඣႆb
+2ඣႆb
+࠯43
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 44 =====
+ሧჷ
+ሧჷ
+֖
+•uESP32-S3඀v–܂ESP32-S3b
+• uESP32-S3ඌҕॉ൭Ҩv–܂ESP32-S3བྷ༥൐Ⴈඪૼb
+• uESP32-S3ᆷଲv–ႿESP32-S3b
+• uESP32-S3 ༢ਙྉோा༂іv– ૭ඍESP32-S3ၘᆩհ༂b
+• ᆣ඀
+https://espressif.com/zh-hans/support/documents/certificates
+• ESP32-S3 Ӂ௖/๙ᆩ(PCN)
+https://espressif.com/zh-hans/support/documents/pcns?keys=ESP32-S3
+• ESP32-S3ۡ܄–νಆabugྐ༏
+https://espressif.com/zh-hans/support/documents/advisories?keys=ESP32-S3
+•ᄇ๙ᆩ
+https://espressif.com/zh-hans/support/download/documents
+ᆀഠ౵
+• uESP32-S3ESP-IDF щӱᆷଲv– ESP-IDFᇏྏb
+• ESP-IDFࠣGitHubࡏ
+https://github.com/espressif
+• ESP32 ંฆ–ӱഽ(E2E)b
+https://esp32.com/
+• ESP-FAQ–b
+https://espressif.com/projects/esp-faq/zh_CN/latest/index.html
+• The ESP Journal –ቔෛгb
+https://blog.espressif.com/
+• SDKဆൕaAppऎaAT༯ᄛሧჷ
+https://espressif.com/zh-hans/support/download/sdks-demos
+Ӂ௖
+• ESP32-S3 ༢ਙྉோ– ESP32-S3 ಆ༢ਙྉோb
+https://espressif.com/zh-hans/products/socs?id=ESP32-S3
+• ESP32-S3 ༢ਙଆቆ– ESP32-S3 ಆ༢ਙଆቆb
+https://espressif.com/zh-hans/products/modules?id=ESP32-S3
+• ESP32-S3ϰ– ESP32-S3ϰb
+https://espressif.com/zh-hans/products/devkits?id=ESP32-S3
+• ESP Product SelectorऎĎ–Ӂ௖b
+https://products.espressif.com/#/product-selector?language=zh
+৳༢໡ૌ
+•ਫ਼ჰ৘๭& PCBၰ
+https://espressif.com/zh-hans/contact-us/sales-questions
+࠯44
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 45 =====
+৥ൎ
+৥ൎ
+ರ௹ ϱЧ҃ඪૼ
+2026-03-02 v1.7
+•p
+•ࢫ5.2 ຓഡ૭ඍ֥ࢫ஥ٳ
+•ᄝ5.2.1.9 SD/MMC॥ᇅఖ၂่ඪૼ
+•۬6-6ݻۿ֥
+2025-07-25 v1.6
+•ࢫ4.5໊
+•ࢫ6.5۬ܿ
+•ࢫ৘
+•׮ڿ
+2025-06-10 v1.5
+•ࢫ2ିॿ๭ልଽflash/PSRAM༢
+ᇿ൤
+2024-12-03 v1.4
+•ݼESP32-S3-WROOM-2-N32R16V
+•ݼESP32-S3-WROOM-2-N16R8VބESP32-S3-WROOM-2-
+N32R8Vྍູ๔Ӂ
+2024-11-14 v1.3
+•ࢫ1.2бඪૼ
+•ࢫ1.3 ႋႨ
+•ࢫStrapping࢖ܵࢫ4஥ᇂཛ
+•ࢫ5.2 ຓഡ૭ඍ
+•ࢫగหྟࢫ6గหྟࢫ7 ഝ௔หྟބ
+ծՊ
+•ࢫބPCBል๭ྙࢫ10 ଆቆԄժބ11 PCBࡹ
+ၰࢫ11.2 PCB٢
+•ࢫ11.1 PCBል๭ྙ ᇏྍᄹESP32-S3-WROOM-2֥3Dࢤ
+•ྍ๭12-1౷ཌ
+•ྍ
+2023-11-24 v1.2
+• ᄝі1-1 ESP32-S3-WROOM-2бభਆ่іᇿ
+•ࢫ4.1ଆൔ॥ᇅ
+• ྩᆞਔі7-1 Wi-Fi۬ܿຶ
+•ࢫ8 ଆቆჰ৘๭ଆቆჰ৘๭
+•ࢫ10 ଆቆԄժଆቆԄժ๭
+•׮ڿ
+༯်
+࠯45
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 46 =====
+৥ൎ
+ഈ်
+ರ௹ ϱЧ҃ඪૼ
+2023-03-07 v1.1
+•ࢫStrapping࢖ܵ
+•ࢫ6.4หྟ
+•ੱՖ21 dBmྍູ20 dBm
+•ࢫ9ჰ৘๭૭ඍ
+•ࢫ11.1 PCBል๭ྙ૭ඍ
+•ࢫ12.4
+•׮ڿ
+2022-11-01 v1.0
+•ҩ൫ྐ༏
+•ྍі1-1і6-6ᇿ൤
+•ྍі3-1ᇿ൤
+•ྍі7-8ຶ
+•׮ڿ
+2022-05-09 v0.7۬
+2021-12-31 v0.6ྉோϱЧrevision 1
+2021-07-13 v0.1ྉோϱЧrevision 0
+࠯46
+࡮
+ESP32-S3-WROOM-2඀v1.7
+===== PAGE 47 =====
+ۡ܄
+֥URLđඖ҂ਸ਼ྛ๙ᆩb
+Ќᆣb
+ဢ
+Ќᆣb
+֖
+൞πൕྸॖb
+Wi-Fi݂Wi-Fi ৳ૐ෮Ⴕbড࿩ѓᆽ൞Bluetooth SIGᇿҨഅѓb
+ҍӁđหՎലૼb
+݂© 2026ඳbЌ਽෮Ⴕಃ০b
+www.espressif .com

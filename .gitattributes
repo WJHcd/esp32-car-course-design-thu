@@ -1,0 +1,34 @@
+# 统一文本文件的换行符，防止多人协作时出现 CRLF/LF 混乱
+* text=auto
+
+# 明确指定这些文件使用 LF（嵌入式/脚本项目惯例）
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.ino text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
+# 二进制文件不要做任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.pdf binary
+*.exe binary
+*.bin binary
+*.elf binary
+*.a binary
+*.o binary
+*.zip binary
+*.7z binary
+*.rar binary
