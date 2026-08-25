@@ -5,12 +5,15 @@
 /* ============================================================
  * 四路红外循迹模块 LQ-R4CHV
  *   - 黑色 PCB，4 路红外对管，输出 OUT1~OUT4（数字量）
- *   - 常用 LM393 比较器："检测到黑线输出低电平"（极性见 IR_LINE_LEVEL）
+ *   - 极性（2026-08-25 实测修正）：黑线=低电平、白底=高电平
+ *     （常规 LM393 极性，见 pins.h 的 IR_LINE_LEVEL）
  *
- * a/b/c/d 映射（沿用参考 STM32 程序 sensor1~4 → d,a,b,c）：
- *     a = OUT2,  b = OUT3,  c = OUT4,  d = OUT1
- * ⚠️ 若实际装车后左右顺序相反，把 s_ir_out 表调换顺序即可，
- *    并在 test_infrared 里观察 OUT1~4 与 a/b/c/d 的对应。
+ * a/b/c/d 映射（2026-08-25 按装车物理位置修正）：
+ *     a = OUT4,  b = OUT3,  c = OUT2,  d = OUT1
+ *     即 a→b→c→d 对应 OUT4→OUT3→OUT2→OUT1 的物理顺序
+ *     （a/b 为一侧，c/d 为另一侧，与误差公式 E_V=(a*1.9+b*1.2)-(c*1.2+d*1.9) 一致）。
+ * ⚠️ 若实际装车后左右顺序相反，调换 s_ir_out 表或 infrared_read()
+ *    里的 a/b/c/d 赋值即可，并在 test_infrared 里观察核对。
  * ============================================================ */
 
 /* OUT 口 → GPIO（顺序：OUT1..OUT4） */
@@ -58,10 +61,10 @@ void infrared_read(infrared_pattern_t *pat)
         val[i] = (raw & (1u << i)) ? 0 : -1;   /* 0=在线上, -1=在线外 */
     }
 
-    pat->d = val[0];   /* OUT1 */
-    pat->a = val[1];   /* OUT2 */
-    pat->b = val[2];   /* OUT3 */
-    pat->c = val[3];   /* OUT4 */
+    pat->d = val[0];   /* OUT1 → d */
+    pat->c = val[1];   /* OUT2 → c */
+    pat->b = val[2];   /* OUT3 → b */
+    pat->a = val[3];   /* OUT4 → a */
 }
 
 bool infrared_all_black(const infrared_pattern_t *pat)

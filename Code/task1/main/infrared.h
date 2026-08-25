@@ -9,10 +9,10 @@
  *   -1 = 该路在线上外（白底）
  * a/b/c/d 与 LQ-R4CHV 的 OUT 口对应关系见 infrared.c 顶部注释。 */
 typedef struct {
-    int8_t a;   /* OUT2（参考程序 sensor2） */
-    int8_t b;   /* OUT3（参考程序 sensor3） */
-    int8_t c;   /* OUT4（参考程序 sensor4） */
-    int8_t d;   /* OUT1（参考程序 sensor1） */
+    int8_t a;   /* OUT4 */
+    int8_t b;   /* OUT3 */
+    int8_t c;   /* OUT2 */
+    int8_t d;   /* OUT1 */
 } infrared_pattern_t;
 
 /**

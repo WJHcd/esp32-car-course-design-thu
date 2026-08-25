@@ -21,7 +21,7 @@
  *   2 = 超声检测测试   （test_ultrasonic）
  *   3 = 行走策略自检   （test_walking，不驱动电机，安全）
  * ============================================================ */
-#define TASK1_MODE  1
+#define TASK1_MODE  2
 
 /* 综合模式：红外 + 超声波 + 行走策略，20ms 一个控制周期 */
 void app_integrated(void)

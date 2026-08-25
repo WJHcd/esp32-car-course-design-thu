@@ -23,12 +23,14 @@
  * ===================================================================== */
 
 /* ---- 四路红外循迹 LQ-R4CHV（数字量输出，OUT1~OUT4） ---- */
-#define IR_GPIO_OUT1   GPIO_NUM_18   /* 对应参考程序 sensor1 → d */
-#define IR_GPIO_OUT2   GPIO_NUM_21   /* 对应参考程序 sensor2 → a */
-#define IR_GPIO_OUT3   GPIO_NUM_41   /* 对应参考程序 sensor3 → b */
-#define IR_GPIO_OUT4   GPIO_NUM_42   /* 对应参考程序 sensor4 → c */
+/* a/b/c/d 映射（2026-08-25 修正）：a=OUT4, b=OUT3, c=OUT2, d=OUT1 */
+#define IR_GPIO_OUT1   GPIO_NUM_18   /* → d */
+#define IR_GPIO_OUT2   GPIO_NUM_21   /* → c */
+#define IR_GPIO_OUT3   GPIO_NUM_41   /* → b */
+#define IR_GPIO_OUT4   GPIO_NUM_42   /* → a */
 
-/* 黑线对应的 GPIO 电平：LQ-R4CHV（LM393 比较器）通常"检测到黑线=低电平"。
+/* 黑线对应的 GPIO 电平（2026-08-25 实测修正）：
+ *   本模块为常规极性：黑线=低电平、白底=高电平，故 IR_LINE_LEVEL=0。
  * 若实测相反，把 0 改成 1 即可（测试程序 test_infrared 里可直接观察）。 */
 #define IR_LINE_LEVEL  0
 
