@@ -12,3 +12,9 @@ void encoder_init(void);
  * @param id MOTOR_A / MOTOR_B / MOTOR_C
  */
 int32_t encoder_get_count(int id);
+
+/** @brief 清零指定编码器累计计数。 */
+void encoder_clear_count(int id);
+
+/** @brief 清零三个编码器累计计数。 */
+void encoder_clear_all(void);

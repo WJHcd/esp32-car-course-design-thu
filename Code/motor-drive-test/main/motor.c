@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "esp_rom_sys.h"
 
 /* ========== 引脚分配（ESP32-S3 ↔ D24A 驱动板） ==========
  * 避开：GPIO0(BOOT)、3(strapping)、19/20(USB)、26~37(flash/PSRAM)、
@@ -39,10 +40,19 @@ static const gpio_num_t s_dir_pins[MOTOR_NUM][2] = {
 
 static const gpio_num_t s_pwm_gpio[MOTOR_NUM] = { GPIO_PWMA, GPIO_PWMB, GPIO_PWMC };
 static const ledc_channel_t s_pwm_ch[MOTOR_NUM] = { LEDC_CHANNEL_0, LEDC_CHANNEL_1, LEDC_CHANNEL_2 };
+static motor_dir_t s_last_motion_dir[MOTOR_NUM] = {
+    MOTOR_DIR_COAST, MOTOR_DIR_COAST, MOTOR_DIR_COAST
+};
+
+static void set_pwm_duty(int id, uint32_t duty)
+{
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, s_pwm_ch[id], duty));
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, s_pwm_ch[id]));
+}
 
 void motor_init(void)
 {
-    /* STBY：高电平使能 */
+    /* STBY 先保持低，避免方向/PWM 尚未初始化时电机窜动。 */
     gpio_config_t stby_cfg = {
         .pin_bit_mask = 1ULL << GPIO_STBY,
         .mode = GPIO_MODE_OUTPUT,
@@ -50,8 +60,8 @@ void motor_init(void)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&stby_cfg);
-    gpio_set_level(GPIO_STBY, 1);
+    ESP_ERROR_CHECK(gpio_config(&stby_cfg));
+    ESP_ERROR_CHECK(gpio_set_level(GPIO_STBY, 0));
 
     /* 6 个方向引脚 */
     uint64_t dir_mask = 0;
@@ -65,7 +75,13 @@ void motor_init(void)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&dir_cfg);
+    ESP_ERROR_CHECK(gpio_config(&dir_cfg));
+
+    /* TB6612FNG: IN1=0, IN2=0 为 STOP/高阻。 */
+    for (int i = 0; i < MOTOR_NUM; i++) {
+        ESP_ERROR_CHECK(gpio_set_level(s_dir_pins[i][0], 0));
+        ESP_ERROR_CHECK(gpio_set_level(s_dir_pins[i][1], 0));
+    }
 
     /* LEDC 定时器：20kHz, 10bit */
     ledc_timer_config_t timer_cfg = {
@@ -91,6 +107,20 @@ void motor_init(void)
         ESP_ERROR_CHECK(ledc_channel_config(&ch_cfg));
         motor_set_dir(i, MOTOR_DIR_COAST);
     }
+
+    /* 安全约定：motor_init() 不自动使能功率级。 */
+    motor_enable(false);
+}
+
+void motor_enable(bool enable)
+{
+    if (!enable) {
+        for (int i = 0; i < MOTOR_NUM; i++) {
+            set_pwm_duty(i, 0);
+            motor_set_dir(i, MOTOR_DIR_COAST);
+        }
+    }
+    ESP_ERROR_CHECK(gpio_set_level(GPIO_STBY, enable ? 1 : 0));
 }
 
 void motor_set_dir(int id, motor_dir_t dir)
@@ -101,12 +131,12 @@ void motor_set_dir(int id, motor_dir_t dir)
     switch (dir) {
     case MOTOR_DIR_FORWARD:  in1 = 1; in2 = 0; break;
     case MOTOR_DIR_BACKWARD: in1 = 0; in2 = 1; break;
-    case MOTOR_DIR_BRAKE:    in1 = 0; in2 = 0; break;
+    case MOTOR_DIR_BRAKE:    in1 = 1; in2 = 1; break;
     case MOTOR_DIR_COAST:
-    default:                 in1 = 1; in2 = 1; break;
+    default:                 in1 = 0; in2 = 0; break;
     }
-    gpio_set_level(s_dir_pins[id][0], in1);
-    gpio_set_level(s_dir_pins[id][1], in2);
+    ESP_ERROR_CHECK(gpio_set_level(s_dir_pins[id][0], in1));
+    ESP_ERROR_CHECK(gpio_set_level(s_dir_pins[id][1], in2));
 }
 
 void motor_set_speed(int id, int percent)
@@ -115,18 +145,33 @@ void motor_set_speed(int id, int percent)
     if (percent > 100)  percent = 100;
     if (percent < -100) percent = -100;
 
-    motor_dir_t dir = (percent >= 0) ? MOTOR_DIR_FORWARD : MOTOR_DIR_BACKWARD;
+    if (percent == 0) {
+        set_pwm_duty(id, 0);
+        motor_set_dir(id, MOTOR_DIR_COAST);
+        return;
+    }
+
+    motor_dir_t dir = (percent > 0) ? MOTOR_DIR_FORWARD : MOTOR_DIR_BACKWARD;
     uint32_t duty = (uint32_t)((percent < 0 ? -percent : percent) * MOTOR_PWM_MAX / 100);
 
+    /* 正反方向切换前先撤掉 PWM，避免带占空比硬反转。 */
+    if ((s_last_motion_dir[id] == MOTOR_DIR_FORWARD ||
+         s_last_motion_dir[id] == MOTOR_DIR_BACKWARD) &&
+        s_last_motion_dir[id] != dir) {
+        set_pwm_duty(id, 0);
+        motor_set_dir(id, MOTOR_DIR_COAST);
+        esp_rom_delay_us(2000);
+    }
+
     motor_set_dir(id, dir);
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, s_pwm_ch[id], duty));
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, s_pwm_ch[id]));
+    set_pwm_duty(id, duty);
+    s_last_motion_dir[id] = dir;
 }
 
 void motor_stop_all(void)
 {
     for (int i = 0; i < MOTOR_NUM; i++) {
-        motor_set_speed(i, 0);
+        set_pwm_duty(i, 0);
         motor_set_dir(i, MOTOR_DIR_BRAKE);
     }
 }
