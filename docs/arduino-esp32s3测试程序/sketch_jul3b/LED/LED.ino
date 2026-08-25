@@ -1,5 +1,3 @@
-#include <dummy.h>
-
 #define RGB_LED_Pin 38                                         // RGB_LED 引脚
 
 void RGD_LED(int round)
@@ -28,4 +26,3 @@ void loop() {
  RGD_LED(1);
  delay(10);
 }
-
