@@ -51,7 +51,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
-#define LINE_KD                    0.0f
+#define LINE_KD                    0.5f  /* 少量微分阻尼，抑制直线来回扭动 */
 #define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
 #define LINE_ERROR_FILTER_ALPHA  0.30f /* 数字红外的低通系数，越小越稳但越慢 */
 #define LINE_CENTER_DEADBAND      0.45f /* 小误差不转向，避免直线来回扭动 */
@@ -198,13 +198,21 @@ static int limit_line_turn_slew(int requested_turn)
 /*
  * 外侧探头参与命中即视为接近直角/锐角弯：a&&!c 或 d&&!b
  * （覆盖外侧单点 a/d，也覆盖外侧+内侧 a&&b / c&&d）。
- * “外侧单点”在物理上持续时间极短，20ms 采样大概率漏掉；
- * 放宽后方向在丢线前就已锁定，不再依赖丢线前一拍的瞬时符号。
- * a&&b&&c（|err|=1）不算弯道，仍走正常 PD。
+ * 该判定只负责两件事：锁定找线方向、置弯道标志（供全白后进 CORNER_SEARCH），
+ * 不直接决定控制动作；动作区分见 run_line_controller。
  */
 static bool infrared_is_sharp_corner(const infrared_pattern_t *pat)
 {
     return (pat->a && !pat->c) || (pat->d && !pat->b);
+}
+
+/*
+ * 外侧单探头命中、相邻内侧未命中（a&&!b / d&&!c）：马上就要丢线，
+ * 只有这种图样才用固定大转向的弯道动作；a&&b / c&&d 只是偏得多，走正常 PD。
+ */
+static bool infrared_is_corner_imminent(const infrared_pattern_t *pat)
+{
+    return (pat->a && !pat->b) || (pat->d && !pat->c);
 }
 
 /*
@@ -341,20 +349,27 @@ static void run_line_controller(const infrared_pattern_t *pat, uint32_t now_ms)
         /*
          * 外侧探头命中是方向的最强证据：直接锁定找线方向并把投票计数
          * 置到对应侧，不等逐拍积累（20ms 采样可能只采到一两拍弯道图样）。
+         * 方向锁定对全部弯道图样生效，与控制动作无关。
          */
         s_last_line_side = (error < 0.0f) ? -1 : +1;
         s_line_side_accum = s_last_line_side * LINE_SIDE_FLIP_MIN;
-        s_last_error = error;
-        s_filtered_error = error;
-        s_error_filter_valid = true;
         s_last_line_was_corner = true;
-        const int corner_turn = (error < 0.0f ? -1 : +1) *
-                                STEERING_SIGN * LINE_CORNER_TURN_PCT;
-        apply_body_command(LINE_CORNER_SPEED_PCT, limit_line_turn_slew(corner_turn));
-        return;
+
+        if (infrared_is_corner_imminent(pat)) {
+            /* 外侧单点、马上要丢线：低速+固定大转向，抢在丢线前把车转过来。 */
+            s_last_error = error;
+            s_filtered_error = error;
+            s_error_filter_valid = true;
+            const int corner_turn = (error < 0.0f ? -1 : +1) *
+                                    STEERING_SIGN * LINE_CORNER_TURN_PCT;
+            apply_body_command(LINE_CORNER_SPEED_PCT, limit_line_turn_slew(corner_turn));
+            return;
+        }
+        /* a&&b / c&&d：只是偏得多，不落弯道动作，继续走下面的正常 PD。 */
+    } else {
+        s_last_line_was_corner = false;
     }
 
-    s_last_line_was_corner = false;
     const float filtered_error = filter_line_error(error);
     const float derivative = filtered_error - s_last_error;
     s_last_error = filtered_error;
