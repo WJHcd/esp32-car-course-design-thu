@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "infrared.h"
 #include "ultrasonic.h"
 #include "walking.h"
@@ -21,7 +22,7 @@
  *   2 = 超声检测测试   （test_ultrasonic）
  *   3 = 行走策略自检   （test_walking，不驱动电机，安全）
  * ============================================================ */
-#define TASK1_MODE  2
+#define TASK1_MODE  0
 
 /* 综合模式：红外 + 超声波 + 行走策略，20ms 一个控制周期 */
 void app_integrated(void)
@@ -32,40 +33,50 @@ void app_integrated(void)
     walking_set_output_enabled(true);
 
     printf("\n========== 综合模式：循迹 + 超声波避障 ==========\n");
-    printf("控制周期 20ms，超声波每 200ms 测一次（阻塞最长 30ms）\n\n");
+    printf("目标控制周期 20ms，超声波每 100ms 单次测量（最长阻塞约 30ms）\n\n");
 
     uint32_t tick = 0;
-    uint16_t distance = ULTRASONIC_INVALID;
+    uint16_t last_distance = ULTRASONIC_INVALID;
+    TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
         infrared_pattern_t pat;
         infrared_read(&pat);
 
-        /* 每 10 拍（200ms）测一次距离，避免阻塞控制循环 */
-        if (tick % 10 == 0) {
-            distance = ultrasonic_measure_cm();
+        /* 只有测量发生的这一拍才把距离交给状态机，避免重复消费旧样本。 */
+        uint16_t distance_sample = ULTRASONIC_INVALID;
+        if (tick % 5 == 0) {
+            distance_sample = ultrasonic_measure_cm();
+            last_distance = distance_sample;
         }
 
-        walking_update(&pat, distance);
+        const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        walking_update(&pat, distance_sample, now_ms);
 
         /* 每 25 拍（500ms）打印一次状态 */
         if (tick % 25 == 0) {
-            const char *dstr = (distance == ULTRASONIC_INVALID)
-                               ? "无效" : "cm";
-            if (distance == ULTRASONIC_INVALID) {
-                printf("[%6lu ms] state=%-15s a=%2d b=%2d c=%2d d=%2d 距离=无效\n",
-                       (unsigned long)(tick * 20),
+            walking_command_t cmd = walking_get_last_command();
+            if (last_distance == ULTRASONIC_INVALID) {
+                printf("[%6lu ms] state=%-16s a=%u b=%u c=%u d=%u "
+                       "err=%+.2f cmd(F=%+d,T=%+d) 距离=无效\n",
+                       (unsigned long)now_ms,
                        walking_state_name(walking_get_state()),
-                       pat.a, pat.b, pat.c, pat.d);
+                       pat.a, pat.b, pat.c, pat.d,
+                       walking_get_last_error(),
+                       cmd.forward_percent, cmd.turn_percent);
             } else {
-                printf("[%6lu ms] state=%-15s a=%2d b=%2d c=%2d d=%2d 距离=%3u %s\n",
-                       (unsigned long)(tick * 20),
+                printf("[%6lu ms] state=%-16s a=%u b=%u c=%u d=%u "
+                       "err=%+.2f cmd(F=%+d,T=%+d) 距离=%3u cm\n",
+                       (unsigned long)now_ms,
                        walking_state_name(walking_get_state()),
-                       pat.a, pat.b, pat.c, pat.d, distance, dstr);
+                       pat.a, pat.b, pat.c, pat.d,
+                       walking_get_last_error(),
+                       cmd.forward_percent, cmd.turn_percent,
+                       last_distance);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(20));
         tick++;
     }
 }

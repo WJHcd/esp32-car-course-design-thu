@@ -16,18 +16,30 @@ void test_infrared(void)
     printf("\n========== 红外循迹检测测试 ==========\n");
     printf("GPIO: OUT1=%d OUT2=%d OUT3=%d OUT4=%d\n",
            IR_GPIO_OUT1, IR_GPIO_OUT2, IR_GPIO_OUT3, IR_GPIO_OUT4);
-    printf("黑线电平=IR_LINE_LEVEL(%d)：在线上输出0，在线外输出-1\n", IR_LINE_LEVEL);
-    printf("提示：放黑线/遮挡对管观察变化；OUT1~4 顺序与物理位置需核对\n\n");
+    printf("实测黑线电平=IR_LINE_LEVEL(%d)：算法中 1=黑线、0=白底\n", IR_LINE_LEVEL);
+    printf("物理顺序：a(左外)=OUT4, b=OUT3, c=OUT2, d(右外)=OUT1\n\n");
 
     while (1) {
         infrared_pattern_t pat;
-        uint8_t raw = infrared_raw();
+        uint8_t levels = infrared_gpio_levels();
+        uint8_t lines = infrared_line_mask();
         infrared_read(&pat);
 
-        printf("OUT1~4=%d%d%d%d | a=%2d b=%2d c=%2d d=%2d | %s\n",
-               (raw >> 0) & 1, (raw >> 1) & 1, (raw >> 2) & 1, (raw >> 3) & 1,
-               pat.a, pat.b, pat.c, pat.d,
-               infrared_all_black(&pat) ? "全黑" : "  ");
+        float error = 0.0f;
+        bool has_line = infrared_get_error(&pat, &error);
+
+        printf("GPIO OUT1~4=%d%d%d%d | BLACK=%d%d%d%d | a=%u b=%u c=%u d=%u | ",
+               (levels >> 0) & 1, (levels >> 1) & 1,
+               (levels >> 2) & 1, (levels >> 3) & 1,
+               (lines >> 0) & 1, (lines >> 1) & 1,
+               (lines >> 2) & 1, (lines >> 3) & 1,
+               pat.a, pat.b, pat.c, pat.d);
+        if (has_line) {
+            printf("error=%+.2f%s\n", error,
+                   infrared_all_black(&pat) ? " 全黑" : "");
+        } else {
+            printf("丢线(全白)\n");
+        }
 
         vTaskDelay(pdMS_TO_TICKS(200));
     }
