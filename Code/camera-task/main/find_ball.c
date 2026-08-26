@@ -28,7 +28,7 @@ static int s_scan_step = 0;
 
 /* ---------- 状态名表 ---------- */
 static const char *s_state_name[] = {
-    "SEARCH", "TRACK", "ALIGN", "APPROACH", "KICK", "KICK_WAIT",
+    "SEARCH", "TRACK", "ALIGN", "APPROACH", "KICK", "KICK_BACK", "KICK_WAIT",
 };
 
 const char *find_ball_state_name(find_state_t s)
@@ -63,8 +63,13 @@ find_ball_params_t find_ball_default_params(void)
         .approach_target_area = 0.15f,
         .approach_speed = 50,
         .approach_diff_gain = 30,
-        /* KICK */
+        /* KICK（方案 A+D） */
         .kick_retry_max = 3,
+        .kick_jump_x = 0.25f,      /* 踢后 x_ratio 变化 > 0.25 → 球被踢走 */
+        .kick_jump_area = 0.6f,    /* 踢后面积 < 踢前的 0.6 → 球远离 */
+        .kick_back_speed = -40,    /* 踢后回退速度 */
+        .kick_back_ms = 500,       /* 回退时长 */
+        .kick_observe_ms = 1500,   /* 踢后观察时长 */
     };
     return p;
 }
@@ -204,31 +209,86 @@ static void state_approach(const ball_detect_result_t *res)
     motion_set_left_right(base - diff, base + diff);
 }
 
-/* ---------- KICK：踢球 + 确认 ---------- */
+/* ---------- KICK：踢球（方案 A+D） ----------
+ * 方案 A（位置跳变判定）：踢前记录球的位置/面积，
+ *   踢后比较：球明显远离（x 跳变 / 面积骤减）→ 判定踢中。
+ * 方案 D（踢后回退）：踢完车稍后退，让球从底盘盲区露出，
+ *   避免"球被车身挡住 → 误判踢中"。
+ */
+static ball_detect_result_t s_kick_before;   /* 踢球前的球状态 */
+static bool s_kick_before_valid = false;
+
 static void state_kick(const ball_detect_result_t *res)
 {
+    /* 记录踢前球状态（若当前帧有球） */
+    if (res->detected) {
+        s_kick_before = *res;
+        s_kick_before_valid = true;
+    } else {
+        s_kick_before_valid = false;
+    }
+
     kick_execute();
     s_kick_retry = 0;
-    s_state = FIND_STATE_KICK_WAIT;
+    s_state = FIND_STATE_KICK_BACK;
     s_tick_start = esp_timer_get_time();
+}
+
+/* 踢后回退：让球露出底盘盲区，再观察判定 */
+static void state_kick_back(const ball_detect_result_t *res)
+{
+    if (esp_timer_get_time() - s_tick_start < s_p.kick_back_ms * 1000) {
+        motion_set_left_right(s_p.kick_back_speed, s_p.kick_back_speed);  /* 后退 */
+        return;
+    }
+    motion_stop();
+    s_tick_start = esp_timer_get_time();
+    s_state = FIND_STATE_KICK_WAIT;
+}
+
+/* 方案 A：判定球是否被踢走（位置跳变 / 面积骤减） */
+static bool kick_ball_moved(const ball_detect_result_t *now)
+{
+    if (!s_kick_before_valid) {
+        /* 踢前没记录到球：退化为"球消失=成功"（仅兜底） */
+        return !now->detected;
+    }
+    if (!now->detected) {
+        return true;   /* 踢后完全看不到 → 认为踢走了（配合回退已排除盲区） */
+    }
+    float dx = now->x_ratio - s_kick_before.x_ratio;
+    if (dx < 0) dx = -dx;
+    float area_ratio = (s_kick_before.area_ratio > 0.0001f)
+                       ? now->area_ratio / s_kick_before.area_ratio : 0.0f;
+    return (dx > s_p.kick_jump_x) || (area_ratio < s_p.kick_jump_area);
 }
 
 static void state_kick_wait(const ball_detect_result_t *res)
 {
-    /* 踢后等待 1s，若球消失认为踢出成功，回 SEARCH */
-    if (esp_timer_get_time() - s_tick_start < 1000000) {
+    /* 观察 kick_observe_ms 后判定 */
+    if (esp_timer_get_time() - s_tick_start < s_p.kick_observe_ms * 1000) {
         return;
     }
 
-    if (!res->detected || s_kick_retry >= s_p.kick_retry_max) {
-        printf("[find_ball] KICK_WAIT → 踢球成功/放弃，回 SEARCH\n");
+    if (kick_ball_moved(res)) {
+        printf("[find_ball] KICK_WAIT → 踢球成功（球已移动/远离），回 SEARCH\n");
         kick_reset();
         s_kick_retry = 0;
+        s_kick_before_valid = false;
+        s_state = FIND_STATE_SEARCH;
+        s_tick_start = esp_timer_get_time();
+    } else if (s_kick_retry >= s_p.kick_retry_max) {
+        printf("[find_ball] KICK_WAIT → 重试 %d 次仍失败，放弃，回 SEARCH\n",
+               s_kick_retry);
+        kick_reset();
+        s_kick_retry = 0;
+        s_kick_before_valid = false;
         s_state = FIND_STATE_SEARCH;
         s_tick_start = esp_timer_get_time();
     } else {
-        printf("[find_ball] KICK_WAIT → 球还在，重试踢球\n");
+        printf("[find_ball] KICK_WAIT → 球未移动，重试踢球\n");
         s_kick_retry++;
+        s_kick_before_valid = false;
         s_state = FIND_STATE_KICK;
     }
 }
@@ -242,6 +302,7 @@ void find_ball_update(const ball_detect_result_t *res)
     case FIND_STATE_ALIGN:       state_align(res);       break;
     case FIND_STATE_APPROACH:    state_approach(res);    break;
     case FIND_STATE_KICK:        state_kick(res);        break;
+    case FIND_STATE_KICK_BACK:   state_kick_back(res);   break;
     case FIND_STATE_KICK_WAIT:   state_kick_wait(res);   break;
     default:                     s_state = FIND_STATE_SEARCH; break;
     }

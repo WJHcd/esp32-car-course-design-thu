@@ -23,7 +23,8 @@ typedef enum {
     FIND_STATE_ALIGN,        /* 车对位 */
     FIND_STATE_APPROACH,     /* 摄像头校准下接近 */
     FIND_STATE_KICK,         /* 踢球 */
-    FIND_STATE_KICK_WAIT,    /* 踢后确认 */
+    FIND_STATE_KICK_BACK,    /* 踢后回退（让球露出底盘盲区） */
+    FIND_STATE_KICK_WAIT,    /* 踢后确认（位置跳变判定） */
 } find_state_t;
 
 /** @brief 状态机运行参数（可现场调） */
@@ -49,8 +50,13 @@ typedef struct {
     int   approach_speed;      /* 接近速度 */
     int   approach_diff_gain;  /* 差速修正增益 */
 
-    /* KICK */
+    /* KICK（方案 A+D：位置跳变判定 + 踢后回退确认） */
     int   kick_retry_max;      /* 踢后未成功的重试次数 */
+    float kick_jump_x;         /* 踢后球 x_ratio 变化阈值（>此值=球被踢走） */
+    float kick_jump_area;      /* 踢后球面积缩小比例阈值（<此比例=球远离） */
+    int   kick_back_speed;     /* 踢后回退速度（负=后退） */
+    int   kick_back_ms;        /* 踢后回退时长（ms） */
+    int   kick_observe_ms;     /* 踢后观察时长（ms） */
 } find_ball_params_t;
 
 /** @brief 获取默认参数（现场标定后可直接改结构体） */
