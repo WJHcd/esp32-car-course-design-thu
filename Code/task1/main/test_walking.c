@@ -1,61 +1,89 @@
 #include "test.h"
 #include "walking.h"
-#include "infrared.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "ultrasonic.h"
 #include <stdio.h>
 
-/* ============================================================
- * 行走策略测试：喂入"合成传感器数据"跑一遍状态机自检。
- * 安全：walking_set_output_enabled(false) 禁止电机输出，
- *       只打印状态转移，验证逻辑是否正确，无需跑道。
- * 脚本：巡线→右偏→左偏→全黑(遇线)→全白；随后超声波 5cm 触发避障。
- * ============================================================ */
+static const infrared_pattern_t CENTER = { .a = 0, .b = 1, .c = 1, .d = 0 };
+static const infrared_pattern_t LEFT   = { .a = 1, .b = 0, .c = 0, .d = 0 };
+static const infrared_pattern_t RIGHT  = { .a = 0, .b = 0, .c = 0, .d = 1 };
+static const infrared_pattern_t WHITE  = { .a = 0, .b = 0, .c = 0, .d = 0 };
+static const infrared_pattern_t BLACK  = { .a = 1, .b = 1, .c = 1, .d = 1 };
 
-/* 合成传感器模式：0=在线上, -1=在线外 */
-static const infrared_pattern_t s_script[] = {
-    { .a = -1, .b = 0, .c = 0, .d = -1 },   /* 0 中间两路在线：直线 */
-    { .a = -1, .b = -1, .c = 0, .d = -1 },  /* 1 右偏（左侧离线）：左修 */
-    { .a = -1, .b = 0, .c = -1, .d = -1 },  /* 2 左偏（右侧离线）：右修 */
-    { .a =  0, .b = 0, .c = 0, .d =  0 },   /* 3 全黑：遇线/路口 */
-    { .a = -1, .b = -1, .c = -1, .d = -1 }, /* 4 全白：已脱离线 */
-};
+static void print_step(uint32_t now_ms, car_state_t before)
+{
+    const car_state_t after = walking_get_state();
+    const walking_command_t cmd = walking_get_last_command();
+    if (after != before) {
+        printf("[%4lu ms] %-16s -> %-16s | F=%+d T=%+d err=%+.2f\n",
+               (unsigned long)now_ms,
+               walking_state_name(before), walking_state_name(after),
+               cmd.forward_percent, cmd.turn_percent,
+               walking_get_last_error());
+    }
+}
+
+static void step_once(const infrared_pattern_t *pat,
+                      uint16_t distance_cm,
+                      uint32_t now_ms)
+{
+    const car_state_t before = walking_get_state();
+    walking_update(pat, distance_cm, now_ms);
+    print_step(now_ms, before);
+}
 
 void test_walking(void)
 {
     walking_init();
     walking_set_output_enabled(false);
-    printf("\n========== 行走策略状态机自检 ==========\n");
-    printf("电机输出已禁用，仅打印状态机转移（逻辑安全）。\n");
-    printf("脚本: 直线→右偏→左偏→全黑(遇线)→全白\n\n");
+    walking_reset(0);
 
-    /* 第 1 步：正常巡线阶段（每种模式跑 10 拍，模拟 20ms×10） */
-    for (int step = 0; step < 5; step++) {
-        for (int i = 0; i < 10; i++) {
-            car_state_t before = walking_get_state();
-            walking_update(&s_script[step], 100);   /* 距离 100cm：无避障 */
-            car_state_t after = walking_get_state();
-            if (after != before) {
-                printf("[步%02d/拍%02d] %-15s -> %-15s\n", step, i,
-                       walking_state_name(before), walking_state_name(after));
-            }
+    printf("\n========== 行走状态机确定性自检 ==========\n");
+    printf("电机 STBY 保持低；使用模拟毫秒时间，不等待真实电机动作。\n\n");
+
+    uint32_t now = 0;
+
+    /* 基本循迹误差方向与全黑处理。 */
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+    printf("中心线: error=%+.2f\n", walking_get_last_error());
+    step_once(&LEFT, ULTRASONIC_INVALID, now += 20);
+    printf("左侧线: error=%+.2f\n", walking_get_last_error());
+    step_once(&RIGHT, ULTRASONIC_INVALID, now += 20);
+    printf("右侧线: error=%+.2f\n", walking_get_last_error());
+    step_once(&BLACK, ULTRASONIC_INVALID, now += 20);
+    printf("全黑低速直行: F=%+d T=%+d\n",
+           walking_get_last_command().forward_percent,
+           walking_get_last_command().turn_percent);
+
+    /* 全白超过宽限时间后进入搜索；连续两拍重新见线后恢复 RUN。 */
+    for (int i = 0; i < 10; i++) {
+        step_once(&WHITE, ULTRASONIC_INVALID, now += 20);
+    }
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+
+    /* 两个相隔 100ms 的独立近距离样本触发避障，旧样本不会重复计数。 */
+    step_once(&CENTER, 10, now += 100);
+    for (int i = 0; i < 4; i++) {
+        step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+    }
+    step_once(&CENTER, 11, now += 20);
+
+    /* 推进模拟时间，覆盖停车、后退、转出、绕行、转回和找线。 */
+    bool recovered = false;
+    for (int i = 0; i < 160; i++) {
+        const car_state_t before = walking_get_state();
+        const infrared_pattern_t *pat =
+            (before == CAR_STATE_AVOID_FIND_LINE) ? &CENTER : &WHITE;
+        step_once(pat, ULTRASONIC_INVALID, now += 20);
+        if (before == CAR_STATE_AVOID_FIND_LINE &&
+            walking_get_state() == CAR_STATE_RUN) {
+            recovered = true;
+            break;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    /* 第 2 步：超声波避障触发（距离 5cm）*/
-    printf("\n-- 超声波 5cm 触发避障 --\n");
-    car_state_t before, after;
-    for (int i = 0; i < 60; i++) {   /* 覆盖 AVOIDING(23拍)+ROTATE(13拍) */
-        before = walking_get_state();
-        walking_update(&s_script[0], 5);
-        after = walking_get_state();
-        if (after != before) {
-            printf("[%02d] %-15s -> %-15s\n", i,
-                   walking_state_name(before), walking_state_name(after));
-        }
-    }
-
-    printf("\n自检完成。\n");
-    walking_set_output_enabled(true);
+    printf("\n最终状态=%s（期望 RUN） | %s\n",
+           walking_state_name(walking_get_state()),
+           recovered ? "避障流程完成" : "避障流程未按预期完成");
+    printf("自检结束；电机仍保持禁用。\n");
 }

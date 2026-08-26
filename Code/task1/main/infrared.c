@@ -41,33 +41,70 @@ void infrared_init(void)
     gpio_config(&cfg);
 }
 
-uint8_t infrared_raw(void)
+uint8_t infrared_gpio_levels(void)
 {
-    uint8_t raw = 0;
+    uint8_t levels = 0;
     for (int i = 0; i < IR_SENSOR_NUM; i++) {
-        if (gpio_get_level(s_ir_out[i]) == IR_LINE_LEVEL) {
-            raw |= (1u << i);   /* bit0=OUT1 ... bit3=OUT4 */
+        if (gpio_get_level(s_ir_out[i]) != 0) {
+            levels |= (1u << i);
         }
     }
-    return raw;
+    return levels;
+}
+
+uint8_t infrared_line_mask(void)
+{
+    const uint8_t levels = infrared_gpio_levels();
+    const uint8_t valid_mask = (1u << IR_SENSOR_NUM) - 1u;
+
+    /* 已实测黑线为低：低电平位取反后即为黑线位。保留宏以便换模块。 */
+    return IR_LINE_LEVEL ? levels : ((uint8_t)~levels & valid_mask);
 }
 
 void infrared_read(infrared_pattern_t *pat)
 {
-    uint8_t raw = infrared_raw();
-    int8_t val[IR_SENSOR_NUM];
-
-    for (int i = 0; i < IR_SENSOR_NUM; i++) {
-        val[i] = (raw & (1u << i)) ? 0 : -1;   /* 0=在线上, -1=在线外 */
+    if (pat == NULL) {
+        return;
     }
 
-    pat->d = val[0];   /* OUT1 → d */
-    pat->c = val[1];   /* OUT2 → c */
-    pat->b = val[2];   /* OUT3 → b */
-    pat->a = val[3];   /* OUT4 → a */
+    const uint8_t mask = infrared_line_mask();
+    pat->d = (mask >> 0) & 1u;   /* OUT1 → 右外 */
+    pat->c = (mask >> 1) & 1u;   /* OUT2 → 右内 */
+    pat->b = (mask >> 2) & 1u;   /* OUT3 → 左内 */
+    pat->a = (mask >> 3) & 1u;   /* OUT4 → 左外 */
 }
 
 bool infrared_all_black(const infrared_pattern_t *pat)
 {
-    return (pat->a == 0 && pat->b == 0 && pat->c == 0 && pat->d == 0);
+    return pat != NULL && pat->a && pat->b && pat->c && pat->d;
+}
+
+bool infrared_all_white(const infrared_pattern_t *pat)
+{
+    return pat != NULL && !pat->a && !pat->b && !pat->c && !pat->d;
+}
+
+uint8_t infrared_line_count(const infrared_pattern_t *pat)
+{
+    if (pat == NULL) {
+        return 0;
+    }
+    return pat->a + pat->b + pat->c + pat->d;
+}
+
+bool infrared_get_error(const infrared_pattern_t *pat, float *error)
+{
+    if (pat == NULL || error == NULL) {
+        return false;
+    }
+
+    const uint8_t count = infrared_line_count(pat);
+    if (count == 0) {
+        return false;
+    }
+
+    /* 从左到右权重 -3、-1、+1、+3；多路命中时取质心。 */
+    const int weighted = -3 * pat->a - pat->b + pat->c + 3 * pat->d;
+    *error = (float)weighted / (float)count;
+    return true;
 }

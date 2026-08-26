@@ -3,49 +3,46 @@
 #include <stdint.h>
 #include "infrared.h"
 
-/* ============================================================
- * 行走策略：状态机（巡线 + 超声波避障）+ PID
- * 从参考 STM32 程序 Car_main.c 的 car_tim() 移植到 ESP32-S3。
- * 由 main.c 周期调用 walking_update() 驱动小车。
- * ============================================================ */
-
-/* 状态机枚举（与参考程序 enum CarState 一致） */
+/* 固定功能只负责前进方向循迹和定时避障；三轮完整全向运动学后续单独标定。 */
 typedef enum {
-    CAR_STATE_RUN = 0,            /* 正常运行（巡线） */
-    CAR_STATE_MEET_FACE,          /* 全黑 → 遇线/路口 */
-    CAR_STATE_BACKWARD,           /* 后退 */
-    CAR_STATE_SEARCH_EXIT_LEFT,   /* 向左寻找出口 */
-    CAR_STATE_SEARCH_EXIT_RIGHT,  /* 向右寻找出口 */
-    CAR_STATE_BACK_TO_FORWARD,    /* 回到前进方向 */
-    CAR_STATE_DASH,               /* 冲刺 */
-    CAR_STATE_AVOIDING,           /* 避障（超声波触发） */
-    CAR_STATE_ROTATE,             /* 旋转回位 */
+    CAR_STATE_RUN = 0,
+    CAR_STATE_LINE_SEARCH,
+    CAR_STATE_AVOID_STOP,
+    CAR_STATE_AVOID_BACKUP,
+    CAR_STATE_AVOID_TURN_OUT,
+    CAR_STATE_AVOID_BYPASS,
+    CAR_STATE_AVOID_TURN_BACK,
+    CAR_STATE_AVOID_FIND_LINE,
+    CAR_STATE_FAILSAFE_STOP,
 } car_state_t;
 
-/**
- * @brief 初始化行走策略（含底层电机驱动 motor_init）
- */
+typedef struct {
+    int forward_percent;  /* 正=沿车头方向前进，负=后退 */
+    int turn_percent;     /* 正负方向由 walking.c 的 STEERING_SIGN 标定 */
+} walking_command_t;
+
+/** 初始化状态机和底层电机；初始化后电机保持禁用。 */
 void walking_init(void);
 
 /**
- * @brief 周期调用（建议 20ms），根据传感器数据执行状态机并驱动电机
- * @param pat          四路循迹模式（a/b/c/d，0=在线，-1=离线）
- * @param distance_cm  超声波距离（ULTRASONIC_INVALID = 无效）
+ * 周期调用行走控制器。
+ *
+ * @param pat          从左到右的四路红外数据（1=黑线，0=白底）
+ * @param distance_cm  本周期新得到的超声距离；没有新样本或测量失败时传
+ *                     ULTRASONIC_INVALID。不要在多个周期重复传同一个旧值。
+ * @param now_ms       单调递增的毫秒时间（例如 esp_timer_get_time()/1000）
  */
-void walking_update(const infrared_pattern_t *pat, uint16_t distance_cm);
+void walking_update(const infrared_pattern_t *pat,
+                    uint16_t distance_cm,
+                    uint32_t now_ms);
 
-/**
- * @brief 获取当前状态（测试/显示用）
- */
+/** 开关真实电机输出；关闭时会刹车并拉低 STBY。 */
+void walking_set_output_enabled(bool enabled);
+
+/** 从故障停车状态恢复到 RUN，同时清空丢线和障碍确认计数。 */
+void walking_reset(uint32_t now_ms);
+
 car_state_t walking_get_state(void);
-
-/**
- * @brief 开关电机输出
- * @param en  true=驱动电机（正常跑车）；false=只跑状态机不驱动（安全自检）
- */
-void walking_set_output_enabled(bool en);
-
-/**
- * @brief 状态枚举 → 名称字符串（打印用）
- */
-const char *walking_state_name(car_state_t s);
+const char *walking_state_name(car_state_t state);
+walking_command_t walking_get_last_command(void);
+float walking_get_last_error(void);
