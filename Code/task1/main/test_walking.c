@@ -61,6 +61,21 @@ void test_walking(void)
     step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
     step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
 
+    /*
+     * 锐角弯：外侧单探头后全白，应立即进入专用原地找出口状态；
+     * 外侧单点不能重捕线，内侧/中央连续三拍才恢复 RUN。
+     */
+    step_once(&LEFT, ULTRASONIC_INVALID, now += 20);
+    step_once(&WHITE, ULTRASONIC_INVALID, now += 20);
+    printf("锐角全白: state=%s F=%+d T=%+d\n",
+           walking_state_name(walking_get_state()),
+           walking_get_last_command().forward_percent,
+           walking_get_last_command().turn_percent);
+    step_once(&LEFT, ULTRASONIC_INVALID, now += 20);
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+    step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
+
     /* 两个相隔 100ms 的独立近距离样本触发避障，旧样本不会重复计数。 */
     step_once(&CENTER, 10, now += 100);
     for (int i = 0; i < 4; i++) {

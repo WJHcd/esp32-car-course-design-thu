@@ -37,6 +37,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define TURN_SIGN_R        (+1)
 #define TURN_SIGN_B        (-1)
 
+/* 后轮只承担转向；0.60 倍是已验证直角弯基本可过的低速标定。 */
+#define TURN_B_GAIN         0.60f
+
 /* 若误差为正（黑线在车体右侧）时实车反而向左修正，把它改成 -1。 */
 #define STEERING_SIGN       (+1)
 
@@ -45,13 +48,27 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 
 /* ------------------------ 控制参数区 ------------------------ */
 #define LINE_BASE_SPEED_PCT       12
-#define LINE_MIN_SPEED_PCT        10
-#define LINE_MAX_TURN_PCT         13
-#define LINE_KP                    4.5f
-#define LINE_KD                    1.2f
-#define LINE_LOST_GRACE_MS       120u
-#define LINE_SEARCH_TIMEOUT_MS  2200u
-#define LINE_SEARCH_TURN_PCT      10
+#define LINE_MIN_SPEED_PCT         8
+#define LINE_MAX_TURN_PCT         10
+#define LINE_KP                    3.0f
+#define LINE_KD                    0.0f
+#define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
+#define LINE_ERROR_FILTER_ALPHA  0.30f /* 数字红外的低通系数，越小越稳但越慢 */
+#define LINE_CENTER_DEADBAND      0.45f /* 小误差不转向，避免直线来回扭动 */
+#define LINE_SEARCH_SIDE_MIN_ERROR 0.25f /* 记录找线方向所需的最小原始偏差 */
+#define LINE_LOST_GRACE_MS        60u
+#define LINE_LOST_FORWARD_PCT      7
+#define LINE_SEARCH_TIMEOUT_MS     0u /* 0=只红外测试时持续找线，直到重新见线 */
+#define LINE_SEARCH_TURN_PCT       12
+#define LINE_CORNER_SPEED_PCT      7
+#define LINE_CORNER_TURN_PCT      12
+/*
+ * 锐角弯专用找出口参数：
+ * - 结束条件始终是确认重新见线，不是定时结束；
+ * - 重试时间只用于判断首选方向很可能错误，届时仅反向尝试一次。
+ */
+#define LINE_CORNER_EXIT_CONFIRM_SAMPLES  3u
+#define LINE_CORNER_RETRY_MS           1000u
 
 #define OBSTACLE_TRIGGER_CM       18u
 #define OBSTACLE_CLEAR_CM         24u
@@ -72,6 +89,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 static const char *const s_state_name[] = {
     "RUN",
     "LINE_SEARCH",
+    "CORNER_SEARCH",
     "AVOID_STOP",
     "AVOID_BACKUP",
     "AVOID_TURN_OUT",
@@ -87,9 +105,17 @@ static uint32_t s_line_lost_since_ms;
 static uint32_t s_last_distance_sample_ms;
 static uint8_t s_obstacle_samples;
 static uint8_t s_line_reacquire_samples;
+static uint8_t s_corner_exit_samples;
 static bool s_line_lost_timing;
+static bool s_last_line_was_corner;
+static bool s_corner_retry_used;
 static bool s_output_enabled;
 static float s_last_error;
+/* +1=黑线最后在右侧，应使用正 turn；-1=最后在左侧，应使用负 turn。 */
+static int s_last_line_side;
+static int s_corner_turn_side;
+static float s_filtered_error;
+static bool s_error_filter_valid;
 static walking_command_t s_last_command;
 
 static int clamp_int(int value, int low, int high)
@@ -114,7 +140,7 @@ static void enter_state(car_state_t state, uint32_t now_ms)
 /*
  * 当前底盘在“不横移”场景下的 L/R/B 混控：
  *   纯前进（已实车校正）：L=-v, R=+v, B=0
- *   原地旋转：左右轮按同向转向分量、后轮 B 按反向分量（1.15 倍补偿）
+ *   原地旋转：左右轮按同向转向分量、后轮 B 按反向分量（0.60 倍补偿）
  * 三轮比例超出 100% 时等比缩放，避免逐轮截断改变运动方向。
  */
 static void apply_body_command(int forward, int turn)
@@ -125,7 +151,7 @@ static void apply_body_command(int forward, int turn)
     float wheel[MOTOR_NUM] = {0};
     wheel[WHEEL_TO_MOTOR_L] = (float)(FORWARD_SIGN_L * forward + TURN_SIGN_L * turn);
     wheel[WHEEL_TO_MOTOR_R] = (float)(FORWARD_SIGN_R * forward + TURN_SIGN_R * turn);
-    wheel[WHEEL_TO_MOTOR_B] = (float)(TURN_SIGN_B * turn) * 1.15f;
+    wheel[WHEEL_TO_MOTOR_B] = (float)(TURN_SIGN_B * turn) * TURN_B_GAIN;
 
     float max_abs = 100.0f;
     for (int i = 0; i < MOTOR_NUM; i++) {
@@ -154,9 +180,60 @@ static void apply_brake(void)
     }
 }
 
+/* 避免数字红外从中心跳到外侧时，转向指令在一个控制周期内突变。 */
+static int limit_line_turn_slew(int requested_turn)
+{
+    const int previous_turn = s_last_command.turn_percent;
+    return clamp_int(requested_turn,
+                     previous_turn - LINE_TURN_SLEW_PCT,
+                     previous_turn + LINE_TURN_SLEW_PCT);
+}
+
+/* 外侧传感器命中、相邻内侧传感器未命中，是直角/锐角弯接近丢线的典型图样。 */
+static bool infrared_is_sharp_corner(const infrared_pattern_t *pat)
+{
+    return (pat->a && !pat->b) || (pat->d && !pat->c);
+}
+
+/*
+ * 锐角弯出口要进入内侧/中央传感器，不能仅凭一个外侧探头的短暂命中确认。
+ * 这样可滤掉转错方向时重新扫到来路线边缘的情况。
+ */
+static bool infrared_is_corner_exit_candidate(const infrared_pattern_t *pat)
+{
+    return pat->b || pat->c;
+}
+
+/*
+ * 找线方向必须基于未经滤波的原始红外位置。
+ * 不能复用 s_last_error：直线防抖的死区会把小误差置零，导致全白后总落到默认方向。
+ */
+static void remember_last_line_side(float raw_error)
+{
+    if (raw_error > LINE_SEARCH_SIDE_MIN_ERROR) {
+        s_last_line_side = +1;
+    } else if (raw_error < -LINE_SEARCH_SIDE_MIN_ERROR) {
+        s_last_line_side = -1;
+    }
+}
+
+static float filter_line_error(float raw_error)
+{
+    if (!s_error_filter_valid) {
+        s_filtered_error = raw_error;
+        s_error_filter_valid = true;
+    } else {
+        s_filtered_error += LINE_ERROR_FILTER_ALPHA * (raw_error - s_filtered_error);
+    }
+
+    return (fabsf(s_filtered_error) < LINE_CENTER_DEADBAND) ? 0.0f : s_filtered_error;
+}
+
 static bool state_accepts_obstacle_trigger(void)
 {
-    return s_state == CAR_STATE_RUN || s_state == CAR_STATE_LINE_SEARCH;
+    return s_state == CAR_STATE_RUN ||
+           s_state == CAR_STATE_LINE_SEARCH ||
+           s_state == CAR_STATE_CORNER_SEARCH;
 }
 
 static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
@@ -192,11 +269,25 @@ static void run_line_controller(const infrared_pattern_t *pat, uint32_t now_ms)
             s_line_lost_since_ms = now_ms;
         }
 
+        /*
+         * 锐角进入后出现全白，说明外侧探头已越过拐点。
+         * 立刻停止前进，按最后确认的黑线侧原地转；不再用固定毫秒数盲目前冲。
+         */
+        if (s_last_line_was_corner) {
+            s_corner_turn_side = s_last_line_side;
+            s_corner_exit_samples = 0;
+            s_corner_retry_used = false;
+            enter_state(CAR_STATE_CORNER_SEARCH, now_ms);
+            apply_body_command(0,
+                               s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
+            return;
+        }
+
         if (elapsed_ms(now_ms, s_line_lost_since_ms) < LINE_LOST_GRACE_MS) {
             const int held_turn = clamp_int(
                 (int)lroundf(STEERING_SIGN * LINE_KP * s_last_error),
                 -LINE_MAX_TURN_PCT, LINE_MAX_TURN_PCT);
-            apply_body_command(LINE_MIN_SPEED_PCT, held_turn);
+            apply_body_command(LINE_LOST_FORWARD_PCT, limit_line_turn_slew(held_turn));
         } else {
             enter_state(CAR_STATE_LINE_SEARCH, now_ms);
         }
@@ -205,20 +296,41 @@ static void run_line_controller(const infrared_pattern_t *pat, uint32_t now_ms)
 
     s_line_lost_timing = false;
 
+    /* 在滤波/死区前记录方向，供全白后的原地找线使用。 */
+    remember_last_line_side(error);
+
     /* 全黑通常是较宽的线或路口：保持低速直行，不执行未经赛道验证的转向。 */
     if (infrared_all_black(pat)) {
         s_last_error = 0.0f;
+        s_filtered_error = 0.0f;
+        s_error_filter_valid = true;
+        s_last_line_was_corner = false;
         apply_body_command(LINE_MIN_SPEED_PCT, 0);
         return;
     }
 
-    const float derivative = error - s_last_error;
-    s_last_error = error;
-    int turn = (int)lroundf(STEERING_SIGN * (LINE_KP * error + LINE_KD * derivative));
+    if (infrared_is_sharp_corner(pat)) {
+        s_last_error = error;
+        s_filtered_error = error;
+        s_error_filter_valid = true;
+        s_last_line_was_corner = true;
+        const int corner_turn = (error < 0.0f ? -1 : +1) *
+                                STEERING_SIGN * LINE_CORNER_TURN_PCT;
+        apply_body_command(LINE_CORNER_SPEED_PCT, limit_line_turn_slew(corner_turn));
+        return;
+    }
+
+    s_last_line_was_corner = false;
+    const float filtered_error = filter_line_error(error);
+    const float derivative = filtered_error - s_last_error;
+    s_last_error = filtered_error;
+    int turn = (int)lroundf(STEERING_SIGN *
+                            (LINE_KP * filtered_error + LINE_KD * derivative));
     turn = clamp_int(turn, -LINE_MAX_TURN_PCT, LINE_MAX_TURN_PCT);
+    turn = limit_line_turn_slew(turn);
 
     /* 转弯越急，前进速度越低，减少冲出赛道。 */
-    int forward = LINE_BASE_SPEED_PCT - abs(turn) / 3;
+    int forward = LINE_BASE_SPEED_PCT - abs(turn) / 2;
     forward = clamp_int(forward, LINE_MIN_SPEED_PCT, LINE_BASE_SPEED_PCT);
     apply_body_command(forward, turn);
 }
@@ -237,8 +349,15 @@ void walking_reset(uint32_t now_ms)
     s_last_distance_sample_ms = now_ms;
     s_obstacle_samples = 0;
     s_line_reacquire_samples = 0;
+    s_corner_exit_samples = 0;
     s_line_lost_timing = false;
+    s_last_line_was_corner = false;
+    s_corner_retry_used = false;
     s_last_error = 0.0f;
+    s_last_line_side = +1;
+    s_corner_turn_side = +1;
+    s_filtered_error = 0.0f;
+    s_error_filter_valid = false;
     s_last_command = (walking_command_t){0};
     if (s_output_enabled) {
         motor_stop_all();
@@ -293,14 +412,59 @@ void walking_update(const infrared_pattern_t *pat,
             s_line_reacquire_samples = 0;
         }
 
+#if LINE_SEARCH_TIMEOUT_MS > 0u
         if (elapsed_ms(now_ms, s_state_enter_ms) >= LINE_SEARCH_TIMEOUT_MS) {
             enter_state(CAR_STATE_FAILSAFE_STOP, now_ms);
             apply_brake();
             break;
         }
+#endif
 
-        const int search_sign = (s_last_error < 0.0f) ? -1 : +1;
-        apply_body_command(0, search_sign * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
+        /*
+         * 普通丢线找线也不在第一次见线时刹车：继续低速原地转，
+         * 直到两拍连续确认后才回到巡线，避免黑白临界处反复停转。
+         */
+        apply_body_command(0, s_last_line_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
+        break;
+    }
+
+    case CAR_STATE_CORNER_SEARCH: {
+        float error;
+        const bool has_line = infrared_get_error(pat, &error);
+
+        if (has_line && infrared_is_corner_exit_candidate(pat)) {
+            if (s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
+                s_corner_exit_samples++;
+            }
+
+            if (s_corner_exit_samples >= LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
+                s_last_error = error;
+                s_filtered_error = error;
+                s_error_filter_valid = true;
+                s_line_lost_timing = false;
+                s_last_line_was_corner = false;
+                enter_state(CAR_STATE_RUN, now_ms);
+                run_line_controller(pat, now_ms);
+                break;
+            }
+        } else {
+            s_corner_exit_samples = 0;
+        }
+
+        /*
+         * 这里不会因满 1000ms 而结束转弯。它仅说明首选方向尚未找到可信出口，
+         * 因而反向尝试一次；此后仍由“连续见线”决定何时恢复巡线。
+         */
+        if (!s_corner_retry_used &&
+            elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_RETRY_MS) {
+            s_corner_turn_side = -s_corner_turn_side;
+            s_corner_retry_used = true;
+            s_state_enter_ms = now_ms;
+            s_corner_exit_samples = 0;
+        }
+
+        apply_body_command(0,
+                           s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
         break;
     }
 
