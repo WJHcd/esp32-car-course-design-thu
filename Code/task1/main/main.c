@@ -40,6 +40,7 @@ static void app_infrared_line_only(void)
     printf("当前为低速/直线防抖/锐角出口确认标定，请先低速测试。\n\n");
 
     uint32_t tick = 0;
+    car_state_t last_state = walking_get_state();
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
@@ -49,12 +50,24 @@ static void app_infrared_line_only(void)
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         walking_update(&pat, ULTRASONIC_INVALID, now_ms);
 
-        if (tick % 25 == 0) {
+        /*
+         * 丢线/找线/锐角恢复期间逐拍打印，状态切换瞬间也打印；
+         * 平稳巡线时仍 25 拍一次。否则两次打印间隔的 25 个控制周期不可见，
+         * 方向记忆何时翻转无从定位。
+         */
+        const car_state_t state = walking_get_state();
+        const bool state_changed = (state != last_state);
+        last_state = state;
+
+        if (state_changed ||
+            state == CAR_STATE_LINE_SEARCH ||
+            state == CAR_STATE_CORNER_SEARCH ||
+            tick % 25 == 0) {
             const walking_command_t cmd = walking_get_last_command();
             printf("[%6lu ms] IR-only state=%-16s a=%u b=%u c=%u d=%u "
                    "err=%+.2f cmd(F=%+d,T=%+d)\n",
                    (unsigned long)now_ms,
-                   walking_state_name(walking_get_state()),
+                   walking_state_name(state),
                    pat.a, pat.b, pat.c, pat.d,
                    walking_get_last_error(),
                    cmd.forward_percent, cmd.turn_percent);
@@ -78,6 +91,7 @@ void app_integrated(void)
 
     uint32_t tick = 0;
     uint16_t last_distance = ULTRASONIC_INVALID;
+    car_state_t last_state = walking_get_state();
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
@@ -94,14 +108,24 @@ void app_integrated(void)
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         walking_update(&pat, distance_sample, now_ms);
 
-        /* 每 25 拍（500ms）打印一次状态 */
-        if (tick % 25 == 0) {
+        /*
+         * 丢线/找线/锐角恢复期间逐拍打印，状态切换瞬间也打印；
+         * 平稳巡线时仍 25 拍（500ms）一次。
+         */
+        const car_state_t state = walking_get_state();
+        const bool state_changed = (state != last_state);
+        last_state = state;
+
+        if (state_changed ||
+            state == CAR_STATE_LINE_SEARCH ||
+            state == CAR_STATE_CORNER_SEARCH ||
+            tick % 25 == 0) {
             walking_command_t cmd = walking_get_last_command();
             if (last_distance == ULTRASONIC_INVALID) {
                 printf("[%6lu ms] state=%-16s a=%u b=%u c=%u d=%u "
                        "err=%+.2f cmd(F=%+d,T=%+d) 距离=无效\n",
                        (unsigned long)now_ms,
-                       walking_state_name(walking_get_state()),
+                       walking_state_name(state),
                        pat.a, pat.b, pat.c, pat.d,
                        walking_get_last_error(),
                        cmd.forward_percent, cmd.turn_percent);
@@ -109,7 +133,7 @@ void app_integrated(void)
                 printf("[%6lu ms] state=%-16s a=%u b=%u c=%u d=%u "
                        "err=%+.2f cmd(F=%+d,T=%+d) 距离=%3u cm\n",
                        (unsigned long)now_ms,
-                       walking_state_name(walking_get_state()),
+                       walking_state_name(state),
                        pat.a, pat.b, pat.c, pat.d,
                        walking_get_last_error(),
                        cmd.forward_percent, cmd.turn_percent,

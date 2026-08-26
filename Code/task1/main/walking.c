@@ -37,8 +37,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define TURN_SIGN_R        (+1)
 #define TURN_SIGN_B        (-1)
 
-/* 后轮只承担转向；0.60 倍是已验证直角弯基本可过的低速标定。 */
-#define TURN_B_GAIN         0.60f
+/* 后轮只承担转向；0.65 倍介于原 0.60 与死区补偿后的等效 0.70 之间的实测折中。 */
+#define TURN_B_GAIN         0.65f
 
 /* 若误差为正（黑线在车体右侧）时实车反而向左修正，把它改成 -1。 */
 #define STEERING_SIGN       (+1)
@@ -55,7 +55,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
 #define LINE_ERROR_FILTER_ALPHA  0.30f /* 数字红外的低通系数，越小越稳但越慢 */
 #define LINE_CENTER_DEADBAND      0.45f /* 小误差不转向，避免直线来回扭动 */
-#define LINE_SEARCH_SIDE_MIN_ERROR 0.25f /* 记录找线方向所需的最小原始偏差 */
+#define LINE_SEARCH_SIDE_MIN_ERROR 0.25f /* 参与方向投票所需的最小原始偏差 */
+#define LINE_SIDE_ACCUM_WINDOW     10  /* 方向投票窗口（拍数，20ms/拍 ≈ 200ms） */
+#define LINE_SIDE_FLIP_MIN          2  /* 累计票达到该值才允许翻转找线方向 */
 #define LINE_LOST_GRACE_MS        60u
 #define LINE_LOST_FORWARD_PCT      7
 #define LINE_SEARCH_TIMEOUT_MS     0u /* 0=只红外测试时持续找线，直到重新见线 */
@@ -69,6 +71,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  */
 #define LINE_CORNER_EXIT_CONFIRM_SAMPLES  3u
 #define LINE_CORNER_RETRY_MS           1000u
+/* 反向重试后仍找不到出口的总兜底时间：超时进故障停车，避免无限原地空转。 */
+#define LINE_CORNER_TIMEOUT_MS         5000u
 
 #define OBSTACLE_TRIGGER_CM       18u
 #define OBSTACLE_CLEAR_CM         24u
@@ -113,6 +117,8 @@ static bool s_output_enabled;
 static float s_last_error;
 /* +1=黑线最后在右侧，应使用正 turn；-1=最后在左侧，应使用负 turn。 */
 static int s_last_line_side;
+/* 方向投票计数器：正=近期线在右侧占优，负=左侧占优。 */
+static int s_line_side_accum;
 static int s_corner_turn_side;
 static float s_filtered_error;
 static bool s_error_filter_valid;
@@ -189,30 +195,49 @@ static int limit_line_turn_slew(int requested_turn)
                      previous_turn + LINE_TURN_SLEW_PCT);
 }
 
-/* 外侧传感器命中、相邻内侧传感器未命中，是直角/锐角弯接近丢线的典型图样。 */
+/*
+ * 外侧探头参与命中即视为接近直角/锐角弯：a&&!c 或 d&&!b
+ * （覆盖外侧单点 a/d，也覆盖外侧+内侧 a&&b / c&&d）。
+ * “外侧单点”在物理上持续时间极短，20ms 采样大概率漏掉；
+ * 放宽后方向在丢线前就已锁定，不再依赖丢线前一拍的瞬时符号。
+ * a&&b&&c（|err|=1）不算弯道，仍走正常 PD。
+ */
 static bool infrared_is_sharp_corner(const infrared_pattern_t *pat)
 {
-    return (pat->a && !pat->b) || (pat->d && !pat->c);
+    return (pat->a && !pat->c) || (pat->d && !pat->b);
 }
 
 /*
- * 锐角弯出口要进入内侧/中央传感器，不能仅凭一个外侧探头的短暂命中确认。
- * 这样可滤掉转错方向时重新扫到来路线边缘的情况。
+ * 锐角弯出口只接受与转弯方向同侧的内侧探头：左转时线必须从左内(b)进入，
+ * 右转时从右内(c)进入。对侧探头先见线说明转过头或扫到了身后的来路线，
+ * 不能算出口；仅凭外侧探头的短暂命中也不算出口。
  */
-static bool infrared_is_corner_exit_candidate(const infrared_pattern_t *pat)
+static bool infrared_is_corner_exit_candidate(const infrared_pattern_t *pat,
+                                              int turn_side)
 {
-    return pat->b || pat->c;
+    return (turn_side < 0) ? (pat->b != 0) : (pat->c != 0);
 }
 
 /*
- * 找线方向必须基于未经滤波的原始红外位置。
+ * 找线方向基于未经滤波的原始红外位置，并对最近若干拍做累计投票：
+ * 单拍抖动只把计数拨动 1，翻不了方向；丢线前约 200ms 内的主导侧说了算。
  * 不能复用 s_last_error：直线防抖的死区会把小误差置零，导致全白后总落到默认方向。
  */
 static void remember_last_line_side(float raw_error)
 {
     if (raw_error > LINE_SEARCH_SIDE_MIN_ERROR) {
-        s_last_line_side = +1;
+        if (s_line_side_accum < LINE_SIDE_ACCUM_WINDOW) {
+            s_line_side_accum++;
+        }
     } else if (raw_error < -LINE_SEARCH_SIDE_MIN_ERROR) {
+        if (s_line_side_accum > -LINE_SIDE_ACCUM_WINDOW) {
+            s_line_side_accum--;
+        }
+    }
+
+    if (s_line_side_accum >= LINE_SIDE_FLIP_MIN) {
+        s_last_line_side = +1;
+    } else if (s_line_side_accum <= -LINE_SIDE_FLIP_MIN) {
         s_last_line_side = -1;
     }
 }
@@ -231,9 +256,12 @@ static float filter_line_error(float raw_error)
 
 static bool state_accepts_obstacle_trigger(void)
 {
+    /*
+     * 锐角原地找线期间不接受超声触发：定时长避障动作会打断转弯出口确认，
+     * 且旋转中测到的“障碍”常是赛道边物，容易把弯道恢复引入 FAILSAFE_STOP。
+     */
     return s_state == CAR_STATE_RUN ||
-           s_state == CAR_STATE_LINE_SEARCH ||
-           s_state == CAR_STATE_CORNER_SEARCH;
+           s_state == CAR_STATE_LINE_SEARCH;
 }
 
 static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
@@ -310,6 +338,12 @@ static void run_line_controller(const infrared_pattern_t *pat, uint32_t now_ms)
     }
 
     if (infrared_is_sharp_corner(pat)) {
+        /*
+         * 外侧探头命中是方向的最强证据：直接锁定找线方向并把投票计数
+         * 置到对应侧，不等逐拍积累（20ms 采样可能只采到一两拍弯道图样）。
+         */
+        s_last_line_side = (error < 0.0f) ? -1 : +1;
+        s_line_side_accum = s_last_line_side * LINE_SIDE_FLIP_MIN;
         s_last_error = error;
         s_filtered_error = error;
         s_error_filter_valid = true;
@@ -355,6 +389,7 @@ void walking_reset(uint32_t now_ms)
     s_corner_retry_used = false;
     s_last_error = 0.0f;
     s_last_line_side = +1;
+    s_line_side_accum = 0;
     s_corner_turn_side = +1;
     s_filtered_error = 0.0f;
     s_error_filter_valid = false;
@@ -402,7 +437,10 @@ void walking_update(const infrared_pattern_t *pat,
         float error;
         if (infrared_get_error(pat, &error)) {
             if (++s_line_reacquire_samples >= 2) {
-                s_last_error = error;
+                /* 干净重启滤波器，不把丢线前的旧误差带进 RUN。 */
+                s_last_error = 0.0f;
+                s_filtered_error = 0.0f;
+                s_error_filter_valid = false;
                 s_line_lost_timing = false;
                 enter_state(CAR_STATE_RUN, now_ms);
                 run_line_controller(pat, now_ms);
@@ -432,39 +470,52 @@ void walking_update(const infrared_pattern_t *pat,
         float error;
         const bool has_line = infrared_get_error(pat, &error);
 
-        if (has_line && infrared_is_corner_exit_candidate(pat)) {
+        /*
+         * 这里不会因满 1000ms 而结束转弯。它仅说明首选方向尚未找到可信出口，
+         * 因而反向尝试一次；此后仍由“连续见线”决定何时恢复巡线。
+         * 注意不再重置 s_state_enter_ms：总超时从进入本状态起算。
+         */
+        if (!s_corner_retry_used &&
+            elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_RETRY_MS) {
+            s_corner_turn_side = -s_corner_turn_side;
+            s_corner_retry_used = true;
+            s_corner_exit_samples = 0;
+        }
+
+        if (has_line &&
+            infrared_is_corner_exit_candidate(pat, s_corner_turn_side)) {
             if (s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
                 s_corner_exit_samples++;
             }
 
             if (s_corner_exit_samples >= LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
-                s_last_error = error;
-                s_filtered_error = error;
-                s_error_filter_valid = true;
+                /* 干净重启滤波器，不把弯道里的瞬时误差带进 RUN。 */
+                s_last_error = 0.0f;
+                s_filtered_error = 0.0f;
+                s_error_filter_valid = false;
                 s_line_lost_timing = false;
                 s_last_line_was_corner = false;
                 enter_state(CAR_STATE_RUN, now_ms);
                 run_line_controller(pat, now_ms);
                 break;
             }
+
+            /*
+             * 确认期间先停住转动，让探头停在线上完成连续采样；
+             * 否则原地旋转稍快时线在探头下停留不足确认窗口，计数被反复清零。
+             */
+            apply_body_command(0, 0);
         } else {
             s_corner_exit_samples = 0;
+            apply_body_command(0,
+                               s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
         }
 
-        /*
-         * 这里不会因满 1000ms 而结束转弯。它仅说明首选方向尚未找到可信出口，
-         * 因而反向尝试一次；此后仍由“连续见线”决定何时恢复巡线。
-         */
-        if (!s_corner_retry_used &&
-            elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_RETRY_MS) {
-            s_corner_turn_side = -s_corner_turn_side;
-            s_corner_retry_used = true;
-            s_state_enter_ms = now_ms;
-            s_corner_exit_samples = 0;
+        /* 总兜底：首选+反向都没找到出口，进故障停车而不是无限空转。 */
+        if (elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_TIMEOUT_MS) {
+            enter_state(CAR_STATE_FAILSAFE_STOP, now_ms);
+            apply_brake();
         }
-
-        apply_body_command(0,
-                           s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT);
         break;
     }
 
@@ -506,6 +557,8 @@ void walking_update(const infrared_pattern_t *pat,
     case CAR_STATE_AVOID_FIND_LINE:
         if (!infrared_all_white(pat)) {
             s_last_error = 0.0f;
+            s_filtered_error = 0.0f;
+            s_error_filter_valid = false;
             s_line_lost_timing = false;
             enter_state(CAR_STATE_RUN, now_ms);
             run_line_controller(pat, now_ms);
@@ -522,6 +575,22 @@ void walking_update(const infrared_pattern_t *pat,
     case CAR_STATE_FAILSAFE_STOP:
     default:
         apply_brake();
+        /*
+         * 故障停车不是死锁：连续 5 拍稳定见线后自动恢复巡线。
+         * 恢复前同样重置滤波器和丢线计时，避免带入停车前的旧状态。
+         */
+        if (!infrared_all_white(pat)) {
+            if (++s_line_reacquire_samples >= 5) {
+                s_last_error = 0.0f;
+                s_filtered_error = 0.0f;
+                s_error_filter_valid = false;
+                s_line_lost_timing = false;
+                enter_state(CAR_STATE_RUN, now_ms);
+                run_line_controller(pat, now_ms);
+            }
+        } else {
+            s_line_reacquire_samples = 0;
+        }
         break;
     }
 }

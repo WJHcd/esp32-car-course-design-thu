@@ -6,6 +6,7 @@
 static const infrared_pattern_t CENTER = { .a = 0, .b = 1, .c = 1, .d = 0 };
 static const infrared_pattern_t LEFT   = { .a = 1, .b = 0, .c = 0, .d = 0 };
 static const infrared_pattern_t RIGHT  = { .a = 0, .b = 0, .c = 0, .d = 1 };
+static const infrared_pattern_t RIGHT_INNER = { .a = 0, .b = 0, .c = 1, .d = 0 };
 static const infrared_pattern_t WHITE  = { .a = 0, .b = 0, .c = 0, .d = 0 };
 static const infrared_pattern_t BLACK  = { .a = 1, .b = 1, .c = 1, .d = 1 };
 
@@ -63,7 +64,8 @@ void test_walking(void)
 
     /*
      * 锐角弯：外侧单探头后全白，应立即进入专用原地找出口状态；
-     * 外侧单点不能重捕线，内侧/中央连续三拍才恢复 RUN。
+     * 对侧内探见线（扫到旧线/转过头）不能算出口，
+     * 同侧内侧/中央连续三拍才恢复 RUN。
      */
     step_once(&LEFT, ULTRASONIC_INVALID, now += 20);
     step_once(&WHITE, ULTRASONIC_INVALID, now += 20);
@@ -71,6 +73,10 @@ void test_walking(void)
            walking_state_name(walking_get_state()),
            walking_get_last_command().forward_percent,
            walking_get_last_command().turn_percent);
+    /* 左转中对侧内探(c)见线：应继续 CORNER_SEARCH，不得当作出口。 */
+    step_once(&RIGHT_INNER, ULTRASONIC_INVALID, now += 20);
+    printf("错侧见线: state=%s（期望仍为 CORNER_SEARCH）\n",
+           walking_state_name(walking_get_state()));
     step_once(&LEFT, ULTRASONIC_INVALID, now += 20);
     step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
     step_once(&CENTER, ULTRASONIC_INVALID, now += 20);
