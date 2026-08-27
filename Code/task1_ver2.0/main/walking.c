@@ -43,22 +43,41 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* 若误差为正（黑线在车体右侧）时实车反而向左修正，把它改成 -1。 */
 #define STEERING_SIGN       (+1)
 
-/* ---- 平移（横移）标定：约定 strafe>0 = 向左平移 ----
- * 初始值按三轮全向对称猜测（L/R 同向、B 反向）；必须用 TASK1_MODE=5
- * 架空轮子实测：若 strafe>0 时车体实际向右，翻转 STRAFE_SIGN_L/R/B 符号。
- * 标定方式与 FORWARD_SIGN_* / TURN_SIGN_* 完全一致，不影响循迹。
- */
-#define STRAFE_SIGN_L       (+1)
-#define STRAFE_SIGN_R       (+1)
-#define STRAFE_SIGN_B       (-1)
-/*
- * 后轮平移增益：按 120° 三轮全向几何，纯平移时 B 轮转速约为 L/R 的 2 倍
- * （L:+v, R:+v, B:-2v）。实车若平移时车体带旋转，再在 1.5~2.5 间微调。
- */
-#define STRAFE_B_GAIN       2.0f
+/* ---- 平移（横移）标定 v3（2026-08-27 按实车几何与 MODE=5 现象修正）----
+ * 实车结构（已确认）：三轮全向底盘，三驱动轮朝外互成 120°；
+ *   B 在【正后方】，A 在【右前方】，C 在【左前方】。
+ *
+ * 运动学要点（s_i 为第 i 轮沿切向的等效转速）：
+ *   - 自转角速度 ω ∝ (s_A+s_B+s_C)：纯平移必须令三轮有效转速之和为零；
+ *   - 纯左移要求 s_A=s_C=+v/2、s_B=-v（B 转速大小 = A+C 之和，比值 1:1:-2）。
+ *
+ * ⚠️ 关键发现：B 电机的"正转"方向约定与 A/C 相反（安装镜像所致）。
+ *   证据：MODE=5 旧参数下左移脉冲强顺时针自旋、右移脉冲强逆时针自旋，
+ *   三轮有效转速全部同号——只有 B 符号约定与 A/C 相反才能同时解释两拍现象，
+ *   并与"前进需 A 反 C 正"、"转向翻转 B 分量后弯道可过"两项已验证事实相容。
+ *
+ * 由此，strafe>0（向左平移）需要三条电机指令同为负：
+ *   m_A=-v/2, m_C=-v/2, m_B=-v  →  三个 SIGN 全取 -1，B_GAIN≈2。
+ *
+ * GAIN 取 1.75 而非理想 2.0 的原因：混控归一化后 B 占空比 100%、
+ * A/C 仅约 57%/51%，电机低占空段出力不足（死区/亚线性），若按 2.0 执行，
+ * B 实际转速会超过 A+C 之和 → 残余自旋。按死区模型
+ *     g = 190/(100 + 死区%)   （已计入 C 轮 0.90 全局增益）
+ * 死区 8%~12% 对应 g≈1.70~1.76，取 1.75。
+ *
+ * 微调指引（MODE=5 着地短脉冲观察）：
+ *  - 左移脉冲仍带顺时针自旋 → 减小 STRAFE_B_GAIN（每次 -0.05）
+ *  - 带逆时针自旋           → 增大 STRAFE_B_GAIN（每次 +0.05）
+ *  - 平移方向整体反了       → 三个 STRAFE_SIGN_* 同时取反
+ *
+ * 迭代记录：1.75 实测仍有轻微逆时针自旋（B 相对偏慢）→ 上调 1.80。 */
+#define STRAFE_SIGN_L       (-1)    /* A：右前轮 */
+#define STRAFE_SIGN_R       (-1)    /* C：左前轮 */
+#define STRAFE_SIGN_B       (-1)    /* B：正后轮（符号约定与 A/C 相反！） */
+#define STRAFE_B_GAIN       1.80f
 
 /* ------------------------ 控制参数区 ------------------------ */
-#define LINE_BASE_SPEED_PCT       12
+#define LINE_BASE_SPEED_PCT       13
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -85,24 +104,79 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* 反向重试后仍找不到出口的总兜底时间：超时进故障停车，避免无限原地空转。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
-#define OBSTACLE_TRIGGER_CM       18u
-#define OBSTACLE_CLEAR_CM         24u
+#define OBSTACLE_TRIGGER_CM       15u
+#define OBSTACLE_CLEAR_CM         21u
 #define OBSTACLE_CONFIRM_SAMPLES   2u
 #define OBSTACLE_SAMPLE_GAP_MS    350u
 
-/* ---- 硬编码平移避障时序（赛道简单，时长/速度实车再调）----
- * 约定：左/右平移时长 > 前进时长（初值 800ms / 500ms / 800ms）。
- * 调整时整体缩放即可，保持左/右 > 前进。 */
-#define AVOID_STOP_MS            120u
-#define AVOID_STRAFE_LEFT_MS     800u
-#define AVOID_FORWARD_MS         500u
-#define AVOID_STRAFE_RIGHT_MS    800u
-#define AVOID_FIND_LINE_MS      1800u
-#define AVOID_STRAFE_SPEED_PCT   12
-#define AVOID_FORWARD_SPEED_PCT  15
-#define AVOID_FIND_SPEED_PCT     10
+/* ---- 终点 T 线停车参数（2026-08-27 新增）----
+ * 避障完成回到巡线后，四路全黑连续 FINISH_CONFIRM_SAMPLES 拍即判定
+ * 到达赛道末尾 T 线（横杆宽度足以同时压住四个探头），刹车结束任务。
+ * 赛道前半段该检测不生效（未武装），不会误停。 */
+#define FINISH_CONFIRM_SAMPLES     3u
 
-/* 找线阶段小幅转向扫描的偏置方向（原 AVOID_TURN_SIGN 改名）；±1 按实车微调。 */
+/* ============================================================
+ * 避障时序参数 —— 赛道标定接口（2026-08-27）
+ *
+ * 本赛道（docs/避障图.JPG）：车沿与木板垂直的直线接近木板，
+ * 从【左侧】绕过木板，进入板内的黑线区域，随后恢复原巡线。
+ * 序列：停车 → 左移 → 前进（越过木板）→ 找回黑线 → RUN。
+ *
+ * ⚠️ 当前数值为"凭感觉"的初值（2026-08-27），联调时按现象只改对应参数：
+ *   ┌────────────────────────┬──────────────────────────────────┐
+ *   │ 联调现象               │ 只改这个参数（本文件内搜索名字）  │
+ *   ├────────────────────────┼──────────────────────────────────┤
+ *   │ 左移不够/过头          │ AVOID_STRAFE_DIST_CM（±5cm 步进）│
+ *   │ 前进撞板/出板太远      │ AVOID_FORWARD_DIST_CM（±5cm）    │
+ *   │ 平移太慢/太快          │ STRAFE_SPEED_CM_S（实测后填真值）│
+ *   │ 避障前进太慢/太快      │ FORWARD_SPEED_CM_S（实测后填）   │
+ *   │ 找线扫错方向           │ AVOID_SCAN_TURN_SIGN（±1 翻转）  │
+ *   │ 找线超时进 FAILSAFE    │ 加大 AVOID_FIND_LINE_MS 或       │
+ *   │                        │ AVOID_SCAN_TURN_PCT              │
+ *   │ 平移带自旋             │ 文件顶部 STRAFE_B_GAIN           │
+ *   └────────────────────────┴──────────────────────────────────┘
+ * ============================================================ */
+
+/* [标定#6] 电机死区下限：低于该值轮子可能不转。MODE=5 实测平移/前进均能
+ * 正常启动，说明当前三档速度(12/15/10%)高于死区，暂按 8% 保留。 */
+#define MOTOR_DEADZONE_PCT       8
+
+/* [标定#1/#2/#4] 平移方向与纯度 —— 已标定通过（见文件顶部 v3 区）：
+ * SIGN 全 -1、B_GAIN=1.80。此处不再重复定义。 */
+
+/* [标定#3] 平移速度：初值按 MODE=5 的 12% 档估 15cm/s。
+ * 联调前建议用卷尺量一次真实值替换（左移位移÷时间）。 */
+#define STRAFE_SPEED_CM_S   10.0f   /* 初值，待实测校准 */
+
+/* [标定#5] 前进速度：初值按 15% 档估 20cm/s。 */
+#define FORWARD_SPEED_CM_S  10.0f   /* 初值，待实测校准 */
+
+/* ---- [赛道几何 #14~#17] 凭感觉的初值（单位 cm），联调时按上表调整----
+ * 参照 docs/避障图.JPG 目测：木板横向遮挡约 40cm、纵深约 15cm，
+ * 超声 18cm 触发时车头距板约 18cm。
+ *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
+ *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
+#define AVOID_STRAFE_DIST_CM    12.0f   /* 初值：左移总距离 */
+#define AVOID_FORWARD_DIST_CM   12.0f   /* 初值：前进越过距离 */
+
+/* 由上面的距离/速度自动换算出各阶段时长（勿手改，改距离或速度即可）。 */
+#define AVOID_STRAFE_MS(dist_cm) \
+    ((uint32_t)((dist_cm) / STRAFE_SPEED_CM_S * 1000.0f))
+#define AVOID_FORWARD_CALC_MS \
+    ((uint32_t)(AVOID_FORWARD_DIST_CM / FORWARD_SPEED_CM_S * 1000.0f))
+
+/* ---- 固定时序（不依赖标定）---- */
+#define AVOID_STOP_MS            120u   /* 确认障碍后的短暂停车 */
+
+/* ---- 找线阶段（AVOID_FIND_LINE）----
+ * 绕过木板后低速前进+小幅扫描找回黑线；见线即恢复 RUN。
+ * [标定#17] 扫描偏置方向：初值 +1（左偏扫）；若试跑发现扫向错误一侧
+ *   （远离 T 干线），翻转成 -1。 */
+#define AVOID_FIND_LINE_MS      2500u   /* 找线总超时；超时进 FAILSAFE_STOP */
+#define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（须 > MOTOR_DEADZONE_PCT） */
+#define AVOID_FORWARD_SPEED_PCT  15     /* 避障前进速度档 */
+#define AVOID_FIND_SPEED_PCT     10     /* 找线前进速度档 */
+#define AVOID_SCAN_TURN_PCT       5     /* 找线扫描转向幅度 */
 #define AVOID_SCAN_TURN_SIGN    (+1)
 
 static const char *const s_state_name[] = {
@@ -112,8 +186,8 @@ static const char *const s_state_name[] = {
     "AVOID_STOP",
     "AVOID_STRAFE_LEFT",
     "AVOID_FORWARD",
-    "AVOID_STRAFE_RIGHT",
     "AVOID_FIND_LINE",
+    "FINISH_STOP",
     "FAILSAFE_STOP",
 };
 
@@ -129,6 +203,11 @@ static bool s_last_line_was_corner;
 static bool s_corner_retry_used;
 static bool s_output_enabled;
 static float s_last_error;
+/* ---- 终点 T 线停车（2026-08-27 新增）----
+ * s_finish_armed：只有避障完成回到巡线后才置位，避免赛道前半段的
+ * 宽线/路口全黑被误判成终点；s_finish_samples：全黑连续确认计数。 */
+static bool s_finish_armed;
+static uint8_t s_finish_samples;
 /* +1=黑线最后在右侧，应使用正 turn；-1=最后在左侧，应使用负 turn。 */
 static int s_last_line_side;
 /* 方向投票计数器：正=近期线在右侧占优，负=左侧占优。 */
@@ -433,6 +512,8 @@ void walking_reset(uint32_t now_ms)
     s_corner_turn_side = +1;
     s_filtered_error = 0.0f;
     s_error_filter_valid = false;
+    s_finish_armed = false;      /* 复位后需重新经避障武装终点检测 */
+    s_finish_samples = 0;
     s_last_command = (walking_command_t){0};
     if (s_output_enabled) {
         motor_stop_all();
@@ -470,6 +551,23 @@ void walking_update(const infrared_pattern_t *pat,
 
     switch (s_state) {
     case CAR_STATE_RUN:
+        /*
+         * 终点 T 线检测（仅在避障完成后武装）：四路全黑连续 3 拍
+         * 判定到达赛道末尾，进 FINISH_STOP 永久停车。
+         */
+        if (s_finish_armed && infrared_all_black(pat)) {
+            if (s_finish_samples < FINISH_CONFIRM_SAMPLES) {
+                s_finish_samples++;
+            }
+            if (s_finish_samples >= FINISH_CONFIRM_SAMPLES) {
+                enter_state(CAR_STATE_FINISH_STOP, now_ms);
+                apply_brake();
+                break;
+            }
+        } else {
+            s_finish_samples = 0;
+        }
+
         run_line_controller(pat, now_ms);
         break;
 
@@ -567,35 +665,39 @@ void walking_update(const infrared_pattern_t *pat,
         break;
 
     case CAR_STATE_AVOID_STRAFE_LEFT:
-        /* strafe>0 = 左移（方向由 STRAFE_SIGN_* 标定） */
+        /* strafe>0 = 左移（方向由 STRAFE_SIGN_* 标定）。
+         * 时长 = AVOID_STRAFE_DIST_CM / STRAFE_SPEED_CM_S，见顶部标定接口。 */
         apply_body_command(0, 0, AVOID_STRAFE_SPEED_PCT);
-        if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_STRAFE_LEFT_MS) {
+        if (elapsed_ms(now_ms, s_state_enter_ms) >=
+                AVOID_STRAFE_MS(AVOID_STRAFE_DIST_CM)) {
             enter_state(CAR_STATE_AVOID_FORWARD, now_ms);
         }
         break;
 
     case CAR_STATE_AVOID_FORWARD:
-        /* 直行前进，越过障碍 */
+        /* 直行前进越过木板；结束时整车应已出板、位于板内 T 线附近。 */
         apply_body_command(AVOID_FORWARD_SPEED_PCT, 0, 0);
-        if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_FORWARD_MS) {
-            enter_state(CAR_STATE_AVOID_STRAFE_RIGHT, now_ms);
-        }
-        break;
-
-    case CAR_STATE_AVOID_STRAFE_RIGHT:
-        /* strafe<0 = 右移（方向由 STRAFE_SIGN_* 标定） */
-        apply_body_command(0, 0, -AVOID_STRAFE_SPEED_PCT);
-        if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_STRAFE_RIGHT_MS) {
+        if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_FORWARD_CALC_MS) {
             enter_state(CAR_STATE_AVOID_FIND_LINE, now_ms);
         }
         break;
 
     case CAR_STATE_AVOID_FIND_LINE:
+        /*
+         * 绕过木板后向【右】平移找回黑线（2026-08-27 按实车联调修改：
+         * 原方案"前进+转向扫描"实测表现为向右转，不符合赛道需求）。
+         * 平移方向由 STRAFE_SIGN_* 标定保证 strafe<0=向右；任何非全白
+         * 即视为见线，恢复 RUN 回到原巡线模式（滤波器干净重启，
+         * 不带避障期旧误差）。超时仍未见到线则进 FAILSAFE_STOP。
+         */
         if (!infrared_all_white(pat)) {
             s_last_error = 0.0f;
             s_filtered_error = 0.0f;
             s_error_filter_valid = false;
             s_line_lost_timing = false;
+            /* 避障完成、重新见线：武装终点 T 线检测（此后全黑=终点） */
+            s_finish_armed = true;
+            s_finish_samples = 0;
             enter_state(CAR_STATE_RUN, now_ms);
             run_line_controller(pat, now_ms);
             break;
@@ -605,7 +707,16 @@ void walking_update(const infrared_pattern_t *pat,
             apply_brake();
             break;
         }
-        apply_body_command(AVOID_FIND_SPEED_PCT, -AVOID_SCAN_TURN_SIGN * 5, 0);
+        /* strafe<0 = 向右平移（速度复用避障平移档） */
+        apply_body_command(0, 0, -AVOID_STRAFE_SPEED_PCT);
+        break;
+
+    case CAR_STATE_FINISH_STOP:
+        /*
+         * 到达赛道末尾 T 线：永久刹车，任务结束。
+         * 与 FAILSAFE_STOP 不同，本状态不自动恢复——终点停车是预期行为。
+         */
+        apply_brake();
         break;
 
     case CAR_STATE_FAILSAFE_STOP:
@@ -634,6 +745,11 @@ void walking_update(const infrared_pattern_t *pat,
 car_state_t walking_get_state(void)
 {
     return s_state;
+}
+
+bool walking_is_finished(void)
+{
+    return s_state == CAR_STATE_FINISH_STOP;
 }
 
 const char *walking_state_name(car_state_t state)

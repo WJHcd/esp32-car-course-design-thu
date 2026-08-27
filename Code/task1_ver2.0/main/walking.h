@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include "infrared.h"
 
-/* 循迹 + 硬编码平移避障；三轴混控（forward/turn/strafe）见 apply_body_command。 */
+/* 循迹 + 硬编码平移避障；三轴混控（forward/turn/strafe）见 apply_body_command。
+ * 避障序列（本赛道）：停车 → 左移 → 前进越过木板 → 右移找回黑线 → RUN；
+ * 此后检测到赛道末尾 T 线（四路全黑）→ FINISH_STOP 停车结束任务。 */
 typedef enum {
     CAR_STATE_RUN = 0,
     CAR_STATE_LINE_SEARCH,
@@ -11,8 +13,8 @@ typedef enum {
     CAR_STATE_AVOID_STOP,
     CAR_STATE_AVOID_STRAFE_LEFT,
     CAR_STATE_AVOID_FORWARD,
-    CAR_STATE_AVOID_STRAFE_RIGHT,
     CAR_STATE_AVOID_FIND_LINE,
+    CAR_STATE_FINISH_STOP,
     CAR_STATE_FAILSAFE_STOP,
 } car_state_t;
 
@@ -47,6 +49,9 @@ car_state_t walking_get_state(void);
 const char *walking_state_name(car_state_t state);
 walking_command_t walking_get_last_command(void);
 float walking_get_last_error(void);
+
+/** 是否已检测到终点 T 线并停车（任务完成标志，供主程序打印/判断）。 */
+bool walking_is_finished(void);
 
 /**
  * 仅测试/标定用：绕过状态机直接驱动三轴（不进入任何状态）。
