@@ -17,11 +17,19 @@
 /* 首次点亮阶段先用 1 MHz。显示数据量很小，低速更能适应杜邦线连接。 */
 #define TFT_SPI_CLOCK_HZ      (1 * 1000 * 1000)
 #define TFT_REFRESH_MS        250
+/* polling 事务安全分块大小（字节）：无 DMA 缓冲时单事务上限约 64 字节，
+ * 预留余量取 60；tft_write 内部按此分块，调用方无需关心。 */
+#define TFT_SPI_CHUNK_MAX     60u
+/*
+ * 颜色宏（RGB565）。实测该屏面板为 BGR 物理排列（MADCTL BGR 位已置，
+ * R/B 仍互换），故在软件侧交换 RED/BLUE 的位值，使上层调用语义正确：
+ * TFT_COLOR_RED 宏在屏幕上呈现红色。
+ */
 #define TFT_COLOR_BLACK       0x0000
 #define TFT_COLOR_WHITE       0xFFFF
-#define TFT_COLOR_RED         0xF800
+#define TFT_COLOR_RED         0x001F
 #define TFT_COLOR_GREEN       0x07E0
-#define TFT_COLOR_BLUE        0x001F
+#define TFT_COLOR_BLUE        0xF800
 #define TFT_COLOR_YELLOW      0xFFE0
 
 typedef struct {
@@ -65,11 +73,26 @@ static void tft_write(bool is_data, const void *data, size_t length)
         return;
     }
     ESP_ERROR_CHECK(gpio_set_level(TFT_DC_GPIO, is_data ? 1 : 0));
-    spi_transaction_t transaction = {
-        .length = length * 8,
-        .tx_buffer = data,
-    };
-    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, &transaction));
+    /*
+     * 分块发送：polling 事务单次长度受限（无 DMA 缓冲时约 64 字节），
+     * 超限会触发 ESP_ERROR_CHECK abort 重启。按 240 字节分块，
+     * 兼顾效率与安全；调用方传入的缓冲必须保持有效直到全部发完。
+     */
+    const uint8_t *bytes = (const uint8_t *)data;
+    while (length > 0) {
+        const size_t chunk = length > TFT_SPI_CHUNK_MAX ? TFT_SPI_CHUNK_MAX : length;
+        spi_transaction_t transaction = {
+            .length = chunk * 8,
+            .tx_buffer = bytes,
+        };
+        esp_err_t err = spi_device_polling_transmit(s_spi, &transaction);
+        if (err != ESP_OK) {
+            /* 写屏失败只影响显示，不允许拖垮整车控制：记录并跳过本次剩余数据 */
+            return;
+        }
+        bytes += chunk;
+        length -= chunk;
+    }
 }
 
 static void tft_command(uint8_t command, const uint8_t *params, size_t param_len)
@@ -185,6 +208,15 @@ static void tft_task(void *unused)
 
 void tft_st7735_init(void)
 {
+    /*
+     * 幂等保护：综合模式与面板自检可能先后调用本函数。
+     * SPI2_HOST 总线重复初始化会返回 ESP_ERR_INVALID_STATE，
+     * 经 ESP_ERROR_CHECK 直接 abort 重启——实测表现为跑车途中白屏重启。
+     */
+    if (s_spi != NULL) {
+        return;
+    }
+
     gpio_config_t dc_cfg = {
         .pin_bit_mask = 1ULL << TFT_DC_GPIO,
         .mode = GPIO_MODE_OUTPUT,
@@ -211,53 +243,63 @@ void tft_st7735_init(void)
     };
     ESP_ERROR_CHECK(spi_bus_add_device(TFT_HOST, &dev_cfg, &s_spi));
 
-    vTaskDelay(pdMS_TO_TICKS(120));  /* RST 与 EN 同步，等待屏幕上电复位完成 */
-    tft_command(0x01, NULL, 0);      /* SWRESET */
-    vTaskDelay(pdMS_TO_TICKS(150));
-    tft_command(0x11, NULL, 0);      /* SLPOUT */
-    vTaskDelay(pdMS_TO_TICKS(120));
     /*
-     * ST7735S 的完整上电序列。仅发送 SLPOUT/COLMOD/DISPON 对某些
-     * 1.8 寸模块不足以完成电源与帧率配置，表现通常就是“背光亮、全白”。
-     * 此处参数适配常见 128x160、红色 PCB 的 1.8 寸 SPI 屏。
+     * DC 引脚在 spi_bus_add_device 之后才配置为输出：SPI 主机初始化时
+     * 会通过 GPIO 矩阵接管 SCK/MOSI，但不会动 DC；此处顺序保证 DC
+     * 不会被任何外设复用覆盖。上电自检（红绿蓝黑）放在最后执行。
      */
-    const uint8_t frmctr1[] = { 0x01, 0x2C, 0x2D };
-    const uint8_t frmctr2[] = { 0x01, 0x2C, 0x2D };
-    const uint8_t frmctr3[] = { 0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D };
-    const uint8_t invctr = 0x07;
-    const uint8_t pwctr1[] = { 0xA2, 0x02, 0x84 };
-    const uint8_t pwctr2 = 0xC5;
-    const uint8_t pwctr3[] = { 0x0A, 0x00 };
-    const uint8_t pwctr4[] = { 0x8A, 0x2A };
-    const uint8_t pwctr5[] = { 0x8A, 0xEE };
-    const uint8_t vmctr1 = 0x0E;
-    const uint8_t color_mode = 0x05; /* RGB565 */
-    const uint8_t madctl = 0xC8;     /* 常见 1.8 寸 ST7735 竖屏 + BGR */
-    const uint8_t gamma_pos[] = {
-        0x02, 0x1C, 0x07, 0x12, 0x37, 0x32, 0x29, 0x2D,
-        0x29, 0x25, 0x2B, 0x39, 0x00, 0x01, 0x03, 0x10,
-    };
-    const uint8_t gamma_neg[] = {
-        0x03, 0x1D, 0x07, 0x06, 0x2E, 0x2C, 0x29, 0x2D,
-        0x2E, 0x2E, 0x37, 0x3F, 0x00, 0x00, 0x02, 0x10,
-    };
-    tft_command(0xB1, frmctr1, sizeof(frmctr1));
-    tft_command(0xB2, frmctr2, sizeof(frmctr2));
-    tft_command(0xB3, frmctr3, sizeof(frmctr3));
-    tft_command(0xB4, &invctr, 1);
-    tft_command(0xC0, pwctr1, sizeof(pwctr1));
-    tft_command(0xC1, &pwctr2, 1);
-    tft_command(0xC2, pwctr3, sizeof(pwctr3));
-    tft_command(0xC3, pwctr4, sizeof(pwctr4));
-    tft_command(0xC4, pwctr5, sizeof(pwctr5));
-    tft_command(0xC5, &vmctr1, 1);
+
+    vTaskDelay(pdMS_TO_TICKS(120));  /* RST 与 EN 同步，等待屏幕上电复位完成 */
+    /*
+     * 初始化序列改为龙邱官方 LQ_TFT18（spi_TFT18.c）的 ILI9163 版本。
+     * 该屏（LQ_TFT18SPIV33）实际为 ILI9163 控制器；此前按 ST7735 序列
+     * 配置电源参数（B1/C0/C5）不匹配，表现为背光亮但全白。
+     * 官方序列：RST 脉冲后 SLPOUT -> COLMOD -> GAMSET -> 0xF2 ->
+     * gamma E0/E1 -> 帧率/电源/VMC -> MADCTL -> DISPON。
+     */
+    tft_command(0x11, NULL, 0);      /* SLPOUT：关闭睡眠，振荡器工作 */
+    vTaskDelay(pdMS_TO_TICKS(120));
+    const uint8_t color_mode = 0x05; /* 0x3A COLMOD：16bit/像素 RGB565 */
     tft_command(0x3A, &color_mode, 1);
-    tft_command(0x36, &madctl, 1);
+    const uint8_t gamset = 0x04;     /* 0x26 GAMSET */
+    tft_command(0x26, &gamset, 1);
+    const uint8_t f2 = 0x01;         /* 0xF2 Driver Output Control */
+    tft_command(0xF2, &f2, 1);
+    /* 0xE0 正伽马校正（官方参数） */
+    const uint8_t gamma_pos[] = {
+        0x3F, 0x25, 0x1C, 0x1E, 0x20, 0x12, 0x2A, 0x90,
+        0x24, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    /* 0xE1 负伽马校正（官方参数） */
+    const uint8_t gamma_neg[] = {
+        0x20, 0x20, 0x20, 0x20, 0x05, 0x00, 0x15, 0xA7,
+        0x3D, 0x18, 0x25, 0x2A, 0x2B, 0x2B, 0x3A,
+    };
     tft_command(0xE0, gamma_pos, sizeof(gamma_pos));
     tft_command(0xE1, gamma_neg, sizeof(gamma_neg));
-    tft_command(0x21, NULL, 0);      /* INVON：多数 ST7735 1.8 寸屏需要 */
-    tft_command(0x13, NULL, 0);      /* NORON */
-    tft_command(0x29, NULL, 0);      /* DISPON */
+    const uint8_t frmctr[] = { 0x00, 0x00 };   /* 0xB1 帧率（官方 DIVA/VPA） */
+    tft_command(0xB1, frmctr, sizeof(frmctr));
+    const uint8_t invcl = 0x07;      /* 0xB4 NLA/NLB/NLC 反转控制 */
+    tft_command(0xB4, &invcl, 1);
+    const uint8_t pwctr1[] = { 0x0A, 0x02 };   /* 0xC0 电源控制 1 */
+    tft_command(0xC0, pwctr1, sizeof(pwctr1));
+    const uint8_t pwctr2 = 0x02;     /* 0xC1 电源控制 2 */
+    tft_command(0xC1, &pwctr2, 1);
+    const uint8_t vmctrl[] = { 0x4F, 0x5A };   /* 0xC5 VCOM 控制 */
+    tft_command(0xC5, vmctrl, sizeof(vmctrl));
+    const uint8_t vcom_offset = 0x40;          /* 0xC7 VCOM offset */
+    tft_command(0xC7, &vcom_offset, 1);
+    /*
+     * 0x36 MADCTL：0xC0 = 竖屏正显（MX=1,MY=1，官方 type=1）。
+     * 实测该屏发红显蓝、发蓝显黄、黑显白——R/B 互换且整体反色，
+     * 需置 BGR 位(0x08)：0xC0 -> 0xC8。若仍有偏差再调 MY/MX。
+     */
+    const uint8_t madctl = 0xC8;
+    tft_command(0x36, &madctl, 1);
+    const uint8_t gctl = 0x00;       /* 0xB7 GCTL */
+    tft_command(0xB7, &gctl, 1);
+    tft_command(0x29, NULL, 0);      /* DISPON 开显示 */
+    tft_command(0x2C, NULL, 0);      /* RAMWR */
     vTaskDelay(pdMS_TO_TICKS(100));
 
     /*
@@ -276,7 +318,7 @@ void tft_st7735_init(void)
 
 void tft_st7735_start_telemetry(void)
 {
-    BaseType_t created = xTaskCreate(tft_task, "tft", 4096, NULL, 1, NULL);
+    BaseType_t created = xTaskCreate(tft_task, "tft", 6144, NULL, 1, NULL);
     ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 }
 

@@ -38,7 +38,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define TURN_SIGN_B        (-1)
 
 /* 后轮只承担转向；0.65 倍介于原 0.60 与死区补偿后的等效 0.70 之间的实测折中。 */
-#define TURN_B_GAIN         0.65f
+#define TURN_B_GAIN         0.68f
 
 /* 若误差为正（黑线在车体右侧）时实车反而向左修正，把它改成 -1。 */
 #define STEERING_SIGN       (+1)
@@ -157,7 +157,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
  *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
 #define AVOID_STRAFE_DIST_CM    12.0f   /* 初值：左移总距离 */
-#define AVOID_FORWARD_DIST_CM   12.0f   /* 初值：前进越过距离 */
+#define AVOID_FORWARD_DIST_CM   14.0f   /* 初值：前进越过距离 */
 
 /* 由上面的距离/速度自动换算出各阶段时长（勿手改，改距离或速度即可）。 */
 #define AVOID_STRAFE_MS(dist_cm) \
