@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf: ">=5.0"
+  usb_host_uvc: "^1.0.3"
+  espressif/esp_jpeg: "^1.0.0"
+  espressif/quirc: "^1.2.0"
+  waveshare/esp_lcd_st7735: "^1.0.0"
