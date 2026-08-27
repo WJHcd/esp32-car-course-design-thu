@@ -7,6 +7,7 @@
 # 测试：test_infrared / test_ultrasonic / test_walking（在 main.c 里用 TASK1_MODE 切换）
 idf_component_register(
     SRCS "main.c" "infrared.c" "ultrasonic.c" "walking.c" "motor.c"
+         "encoder.c" "tft_st7735.c"
          "test_infrared.c" "test_ultrasonic.c" "test_walking.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_driver_ledc esp_driver_gpio esp_timer)
+    REQUIRES esp_driver_ledc esp_driver_gpio esp_driver_pcnt esp_driver_spi esp_timer)

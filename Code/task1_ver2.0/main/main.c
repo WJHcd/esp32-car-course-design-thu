@@ -5,6 +5,8 @@
 #include "infrared.h"
 #include "ultrasonic.h"
 #include "walking.h"
+#include "encoder.h"
+#include "tft_st7735.h"
 #include "test.h"
 
 /* ============================================================
@@ -23,8 +25,9 @@
  *   3 = 行走策略自检   （test_walking，不驱动电机，安全）
  *   4 = 仅红外巡线测试（驱动电机；绝不初始化或读取超声波）
  *   5 = 平移方向自检   （驱动电机；着地观察平移/前进方向，供标定）
+ *   6 = TFT 面板自检    （仅屏幕，红绿蓝黑循环；不初始化任何车载模块）
  * ============================================================ */
-#define TASK1_MODE  0
+#define TASK1_MODE  6
 
 /*
  * 仅红外巡线模式：用于尚未安装/标定 HC-SR04 时的全部落地循迹测试。
@@ -85,10 +88,13 @@ void app_integrated(void)
     infrared_init();
     ultrasonic_init();
     walking_init();
+    encoder_init();
+    tft_st7735_init();
+    tft_st7735_start_telemetry();
     walking_set_output_enabled(true);
 
     printf("\n========== 综合模式：循迹 + 超声波避障 ==========\n");
-    printf("目标控制周期 20ms，超声波每 100ms 单次测量（最长阻塞约 30ms）\n\n");
+    printf("目标控制周期 20ms；TFT 每 250ms 显示三路编码器 RPM 和超声距离。\n\n");
 
     uint32_t tick = 0;
     uint16_t last_distance = ULTRASONIC_INVALID;
@@ -104,6 +110,9 @@ void app_integrated(void)
         if (tick % 5 == 0) {
             distance_sample = ultrasonic_measure_cm();
             last_distance = distance_sample;
+            if (distance_sample != ULTRASONIC_INVALID) {
+                tft_st7735_set_distance(distance_sample);
+            }
         }
 
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -204,6 +213,15 @@ static void app_strafe_test(void)
     }
 }
 
+/* 仅 TFT 面板诊断：不初始化红外、超声、电机或编码器。 */
+static void app_tft_panel_test(void)
+{
+    printf("\n========== TFT 独立面板测试 ==========\n");
+    printf("将循环显示：红 -> 绿 -> 蓝 -> 黑，每种 1 秒。\n");
+    tft_st7735_init();
+    tft_st7735_panel_test();
+}
+
 void app_main(void)
 {
 #if   TASK1_MODE == 1
@@ -216,6 +234,8 @@ void app_main(void)
     app_infrared_line_only();
 #elif TASK1_MODE == 5
     app_strafe_test();
+#elif TASK1_MODE == 6
+    app_tft_panel_test();
 #else
     app_integrated();
 #endif

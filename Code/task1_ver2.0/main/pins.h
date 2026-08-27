@@ -37,3 +37,18 @@
 /* ---- HC-SR04 超声波 ---- */
 #define US_TRIG_GPIO   GPIO_NUM_39
 #define US_ECHO_GPIO   GPIO_NUM_40
+
+/* ---- 三路电机测速编码器（仅使用 A 相：测速大小，方向由电机指令决定） ----
+ * 已实物接线：A/B/C 三个电机的编码器 A 相分别接 GPIO12/14/16。
+ * GPIO13/15/17 留给 TFT 的 SCK/SDI/DC，故不要再接编码器 B 相。 */
+#define ENC_A_GPIO      GPIO_NUM_12
+#define ENC_B_GPIO      GPIO_NUM_14
+#define ENC_C_GPIO      GPIO_NUM_16
+
+/* ---- LQ-TFT18SPIV33（1.8 寸 4 线 SPI，常见 ST7735/ST7735S） ----
+ * 已实物接线：SCK=13, SDI(MOSI)=15, DC=17。
+ * CS 固定接 GND（本项目 SPI 总线上只有本屏），RST 接 ESP32 EN，
+ * 因此不占用额外 GPIO。 */
+#define TFT_SCLK_GPIO   GPIO_NUM_13
+#define TFT_MOSI_GPIO   GPIO_NUM_15  /* TFT SDI */
+#define TFT_DC_GPIO     GPIO_NUM_17
