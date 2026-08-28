@@ -37,8 +37,11 @@
 /* 巡线结果快照 */
 typedef struct {
     bool has_line;        /* 是否检测到黑线 */
+    bool stable;          /* has_line 已连续多帧一致；见线还满足姿态稳定等待 */
     float error;          /* 质心水平误差 [-1,+1]，左负右正，0=居中 */
     uint16_t black_rows;  /* 检出黑线的行数（诊断用） */
+    uint16_t wide_black_rows; /* 黑色覆盖整行 >= 65% 的行数（T 线判定用） */
+    uint32_t frame_seq;   /* 每成功解码一帧递增一次，避免主循环重复消费旧帧 */
 } camera_line_result_t;
 
 /**

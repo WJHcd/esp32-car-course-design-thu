@@ -83,10 +83,12 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_KP                    3.0f
 #define LINE_KD                    0.5f  /* 少量微分阻尼，抑制直线来回扭动 */
 #define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
-#define LINE_ERROR_FILTER_ALPHA  0.30f /* 数字红外的低通系数，越小越稳但越慢 */
-#define LINE_CENTER_DEADBAND      0.45f /* 小误差不转向，避免直线来回扭动 */
-#define LINE_SEARCH_SIDE_MIN_ERROR 0.25f /* 参与方向投票所需的最小原始偏差 */
-#define LINE_SIDE_ACCUM_WINDOW     10  /* 方向投票窗口（拍数，20ms/拍 ≈ 200ms） */
+#define LINE_ERROR_FILTER_ALPHA  0.30f /* 摄像头误差的低通系数，越小越稳但越慢 */
+/* 摄像头误差范围是 [-1,+1]；沿用红外的 0.45 死区会几乎不修正。 */
+#define CAM_CENTER_DEADBAND       0.08f
+#define LINE_SEARCH_SIDE_MIN_ERROR 0.12f /* 参与方向投票所需的最小原始摄像头偏差 */
+/* 以下计数只在“新稳定摄像头帧”到来时更新，约 3fps。 */
+#define LINE_SIDE_ACCUM_WINDOW      4
 #define LINE_SIDE_FLIP_MIN          2  /* 累计票达到该值才允许翻转找线方向 */
 #define LINE_LOST_GRACE_MS        60u
 #define LINE_LOST_FORWARD_PCT      7
@@ -208,6 +210,9 @@ static float s_last_error;
  * 宽线/路口全黑被误判成终点；s_finish_samples：全黑连续确认计数。 */
 static bool s_finish_armed;
 static uint8_t s_finish_samples;
+static uint32_t s_last_cam_frame_seq;
+static uint32_t s_avoid_find_line_start_seq;
+static bool s_cam_new_frame;
 /* +1=黑线最后在右侧，应使用正 turn；-1=最后在左侧，应使用负 turn。 */
 static int s_last_line_side;
 /* 方向投票计数器：正=近期线在右侧占优，负=左侧占优。 */
@@ -332,7 +337,7 @@ static float filter_line_error(float raw_error)
         s_filtered_error += LINE_ERROR_FILTER_ALPHA * (raw_error - s_filtered_error);
     }
 
-    return (fabsf(s_filtered_error) < LINE_CENTER_DEADBAND) ? 0.0f : s_filtered_error;
+    return (fabsf(s_filtered_error) < CAM_CENTER_DEADBAND) ? 0.0f : s_filtered_error;
 }
 
 static bool state_accepts_obstacle_trigger(void)
@@ -379,8 +384,9 @@ static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
  * 误差量纲差异由 CAM_ERR_SCALE 折算进 PD 增益。
  * ============================================================ */
 #define CAM_ERR_BIG       0.45f   /* |err| 超过此值视为"外侧探头命中"（弯道前兆） */
-#define CAM_ERR_SCALE     (LINE_KP / 3.0f)  /* 红外误差约 ±3，摄像头 ±1：折算比例 */
-#define CAM_T_LINE_MIN_ROWS  20u  /* T线判定：检出黑线的采样行数下限（现场标定） */
+#define CAM_ERR_SCALE     4.0f   /* 归一化摄像头误差转换为可用的转向量 */
+/* 终点横杆必须有至少三条“横向黑色覆盖 >=65%”的采样行。 */
+#define CAM_T_LINE_MIN_WIDE_ROWS  3u
 
 /* 把摄像头结果包装成巡线控制器需要的上下文 */
 static camera_line_result_t s_cam;
@@ -394,9 +400,58 @@ static bool cam_is_sharp_corner(void)
 
 static bool cam_all_black(void)
 {
-    /* T 线横杆很宽：多行且质心居中附近、且误差小（整幅被黑覆盖时质心无意义，
-     * 用 black_rows 多 + 见线 判定；阈值现场标定） */
-    return s_cam.has_line && s_cam.black_rows >= CAM_T_LINE_MIN_ROWS;
+    /* 普通纵向黑线也会穿过很多扫描行，不能仅依赖 black_rows。
+     * 终点横杆的区分特征是：连续多行在横向上大面积（>=65%）变黑。 */
+    return s_cam.has_line && s_cam.wide_black_rows >= CAM_T_LINE_MIN_WIDE_ROWS;
+}
+
+void walking_init(void)
+{
+    motor_init();
+    s_output_enabled = false;
+    walking_reset(0);
+}
+
+void walking_reset(uint32_t now_ms)
+{
+    enter_state(CAR_STATE_RUN, now_ms);
+    s_line_lost_since_ms = now_ms;
+    s_last_distance_sample_ms = now_ms;
+    s_obstacle_samples = 0;
+    s_line_reacquire_samples = 0;
+    s_corner_exit_samples = 0;
+    s_line_lost_timing = false;
+    s_last_line_was_corner = false;
+    s_corner_retry_used = false;
+    s_last_error = 0.0f;
+    s_last_line_side = +1;
+    s_line_side_accum = 0;
+    s_corner_turn_side = +1;
+    s_filtered_error = 0.0f;
+    s_error_filter_valid = false;
+    s_finish_armed = false;
+    s_finish_samples = 0;
+    s_last_cam_frame_seq = 0;
+    s_avoid_find_line_start_seq = 0;
+    s_cam_new_frame = false;
+    s_cam = (camera_line_result_t){0};
+    s_last_command = (walking_command_t){0};
+    if (s_output_enabled) {
+        motor_stop_all();
+    }
+}
+
+void walking_set_output_enabled(bool enabled)
+{
+    if (!enabled) {
+        motor_stop_all();
+        motor_enable(false);
+        s_output_enabled = false;
+        return;
+    }
+
+    motor_enable(true);
+    s_output_enabled = true;
 }
 
 void walking_update_cam(const camera_line_result_t *cam,
@@ -408,7 +463,13 @@ void walking_update_cam(const camera_line_result_t *cam,
         apply_brake();
         return;
     }
-    s_cam = *cam;
+    /* 主循环为 20ms、摄像头约为 3fps。只在新稳定帧到来时更新视觉量，
+     * 避免同一张旧图被重复当成多次“确认样本”。 */
+    s_cam_new_frame = cam->stable && cam->frame_seq != s_last_cam_frame_seq;
+    if (s_cam_new_frame) {
+        s_cam = *cam;
+        s_last_cam_frame_seq = cam->frame_seq;
+    }
 
     if (state_accepts_obstacle_trigger() &&
         obstacle_confirmed(distance_cm, now_ms)) {
@@ -423,7 +484,7 @@ void walking_update_cam(const camera_line_result_t *cam,
          * 判定到达赛道末尾，进 FINISH_STOP 永久停车。
          */
         if (s_finish_armed && cam_all_black()) {
-            if (s_finish_samples < FINISH_CONFIRM_SAMPLES) {
+            if (s_cam_new_frame && s_finish_samples < FINISH_CONFIRM_SAMPLES) {
                 s_finish_samples++;
             }
             if (s_finish_samples >= FINISH_CONFIRM_SAMPLES) {
@@ -431,7 +492,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                 apply_brake();
                 break;
             }
-        } else {
+        } else if (s_cam_new_frame) {
             s_finish_samples = 0;
         }
 
@@ -439,7 +500,7 @@ void walking_update_cam(const camera_line_result_t *cam,
         break;
 
     case CAR_STATE_LINE_SEARCH: {
-        if (s_cam.has_line) {
+        if (s_cam_new_frame && s_cam.has_line) {
             if (++s_line_reacquire_samples >= 2) {
                 s_last_error = 0.0f;
                 s_filtered_error = 0.0f;
@@ -449,7 +510,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                 run_line_controller_cam(now_ms);
                 break;
             }
-        } else {
+        } else if (s_cam_new_frame) {
             s_line_reacquire_samples = 0;
         }
 
@@ -481,7 +542,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                                                   : (s_cam.error >  CAM_ERR_BIG / 2));
 
         if (exit_candidate) {
-            if (s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
+            if (s_cam_new_frame && s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
                 s_corner_exit_samples++;
             }
 
@@ -498,7 +559,9 @@ void walking_update_cam(const camera_line_result_t *cam,
 
             apply_body_command(0, 0, 0);
         } else {
-            s_corner_exit_samples = 0;
+            if (s_cam_new_frame) {
+                s_corner_exit_samples = 0;
+            }
             apply_body_command(0,
                                s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
         }
@@ -531,6 +594,7 @@ void walking_update_cam(const camera_line_result_t *cam,
         /* 直行前进越过木板；结束时整车应已出板、位于板内 T 线附近。 */
         apply_body_command(AVOID_FORWARD_SPEED_PCT, 0, 0);
         if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_FORWARD_CALC_MS) {
+            s_avoid_find_line_start_seq = s_last_cam_frame_seq;
             enter_state(CAR_STATE_AVOID_FIND_LINE, now_ms);
         }
         break;
@@ -543,7 +607,8 @@ void walking_update_cam(const camera_line_result_t *cam,
          * 即视为见线，恢复 RUN 回到原巡线模式（滤波器干净重启，
          * 不带避障期旧误差）。超时仍未见到线则进 FAILSAFE_STOP。
          */
-        if (s_cam.has_line) {
+        if (s_cam_new_frame && s_cam.has_line &&
+            s_last_cam_frame_seq > s_avoid_find_line_start_seq) {
             s_last_error = 0.0f;
             s_filtered_error = 0.0f;
             s_error_filter_valid = false;
@@ -574,7 +639,7 @@ void walking_update_cam(const camera_line_result_t *cam,
     case CAR_STATE_FAILSAFE_STOP:
     default:
         apply_brake();
-        if (s_cam.has_line) {
+        if (s_cam_new_frame && s_cam.has_line) {
             if (++s_line_reacquire_samples >= 5) {
                 s_last_error = 0.0f;
                 s_filtered_error = 0.0f;
@@ -583,7 +648,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                 enter_state(CAR_STATE_RUN, now_ms);
                 run_line_controller_cam(now_ms);
             }
-        } else {
+        } else if (s_cam_new_frame) {
             s_line_reacquire_samples = 0;
         }
         break;
@@ -661,7 +726,9 @@ static void run_line_controller_cam(uint32_t now_ms)
     }
 
     s_line_lost_timing = false;
-    remember_last_line_side(error);
+    if (s_cam_new_frame) {
+        remember_last_line_side(error);
+    }
 
     /* T 线/宽黑区：低速直行（终点判定在 walking_update_cam 的 RUN 分支做） */
     if (cam_all_black()) {

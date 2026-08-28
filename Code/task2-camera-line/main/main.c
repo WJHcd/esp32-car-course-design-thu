@@ -181,8 +181,11 @@ static void app_camera_ascii_preview(void)
     while (1) {
         camera_line_result_t res;
         camera_line_get(&res);
-        printf("状态: %s err=%+.2f rows=%u\n",
-               res.has_line ? "见线" : "丢线", res.error, res.black_rows);
+        printf("状态: %s%s err=%+.2f rows=%u wide=%u frame=%lu\n",
+               res.has_line ? "见线" : "丢线",
+               res.stable ? "(稳)" : "(抖)",
+               res.error, res.black_rows, res.wide_black_rows,
+               (unsigned long)res.frame_seq);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -199,11 +202,28 @@ void app_integrated(void)
     encoder_init();
     tft_st7735_init();
     tft_st7735_start_telemetry();
-    camera_line_init();
-    walking_set_output_enabled(true);
+    if (!camera_line_init()) {
+        ESP_LOGE(TAG, "摄像头初始化任务创建失败；电机保持禁用");
+        return;
+    }
 
     printf("\n========== 任务二综合模式：摄像头巡线 + 超声波避障 ==========\n");
-    printf("控制周期 20ms；TFT 每 250ms 显示三路 RPM 和超声距离。\n\n");
+    printf("等待摄像头稳定见线后才使能电机，避免开机枚举期间自主找线。\n\n");
+
+    while (true) {
+        camera_line_result_t cam;
+        camera_line_get(&cam);
+        tft_st7735_set_line(cam.has_line, cam.error);
+        if (camera_line_ready() && camera_line_stable() && cam.has_line) {
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            walking_reset(now_ms);
+            walking_set_output_enabled(true);
+            printf("摄像头已稳定见线（frame=%lu, err=%+.2f），电机输出已使能。\n",
+                   (unsigned long)cam.frame_seq, cam.error);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 
     uint32_t tick = 0;
     uint16_t last_distance = ULTRASONIC_INVALID;
@@ -214,6 +234,7 @@ void app_integrated(void)
         /* 摄像头巡线：取最近一帧的黑线误差 */
         camera_line_result_t cam;
         camera_line_get(&cam);
+        tft_st7735_set_line(cam.has_line, cam.error);
 
         /* 每 5 拍（100ms）测一次超声 */
         uint16_t distance_sample = ULTRASONIC_INVALID;

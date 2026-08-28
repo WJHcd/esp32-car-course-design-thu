@@ -219,18 +219,21 @@ static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void 
         heap_caps_free(list);
         return;
     }
-    ESP_LOGI(TAG, "选定格式: %ux%u MJPEG", list[pick].h_res, list[pick].v_res);
+    /* 释放格式表前拷贝选项；释放后继续读 list[pick] 属于未定义行为。 */
+    const uint16_t selected_w = list[pick].h_res;
+    const uint16_t selected_h = list[pick].v_res;
+    ESP_LOGI(TAG, "选定格式: %ux%u MJPEG", selected_w, selected_h);
     heap_caps_free(list);
 
     s_stream_cfg.usb.dev_addr = addr;
     s_stream_cfg.usb.uvc_stream_index = index;
     s_stream_cfg.usb.vid = UVC_HOST_ANY_VID;
     s_stream_cfg.usb.pid = UVC_HOST_ANY_PID;
-    s_stream_cfg.vs_format.h_res = list[pick].h_res;
-    s_stream_cfg.vs_format.v_res = list[pick].v_res;
+    s_stream_cfg.vs_format.h_res = selected_w;
+    s_stream_cfg.vs_format.v_res = selected_h;
     s_stream_cfg.vs_format.fps = 0;             /* 设备默认帧率 */
     s_stream_cfg.vs_format.format = UVC_VS_FORMAT_MJPEG;
-    s_stream_cfg.advanced.frame_size = MJPEG_SIZE_EST(list[pick].h_res, list[pick].v_res);
+    s_stream_cfg.advanced.frame_size = MJPEG_SIZE_EST(selected_w, selected_h);
 
     s_connect_pending = true;
     if (s_uvc_task_handle) {
@@ -256,6 +259,8 @@ static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_r
     uint32_t black_sum_x = 0;
     uint32_t black_count = 0;
     uint16_t rows_with_line = 0;
+    uint16_t wide_rows = 0;
+    const uint32_t wide_row_min = (uint32_t)w * 65u / 100u;
 
     for (int y = y_start; y < h; y += row_step) {
         const uint8_t *row = rgb + (size_t)y * w * 3;
@@ -275,9 +280,13 @@ static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_r
         if (row_black >= min_black / 4) {
             rows_with_line++;
         }
+        if (row_black >= wide_row_min) {
+            wide_rows++;
+        }
     }
 
     out->black_rows = rows_with_line;
+    out->wide_black_rows = wide_rows;
     if (black_count < min_black) {
         out->has_line = false;
         out->error = 0.0f;
@@ -374,6 +383,11 @@ static void processing_task(void *args)
             }
         }
 
+        s_result.frame_seq++;
+        s_result.stable = (s_line_run_len >= CAM_STABLE_SAMPLES &&
+                           s_stable_state == s_result.has_line &&
+                           (!s_result.has_line ||
+                            (esp_timer_get_time() / 1000 - s_first_seen_ms >= CAM_SETTLE_MS)));
         s_streaming = true;
 
         frames++;
@@ -395,9 +409,10 @@ static void processing_task(void *args)
         if (esp_timer_get_time() - last_log > 500000) {  /* 500ms 打印一次 */
             last_log = esp_timer_get_time();
             if (s_stats_log_enabled) {
-                ESP_LOGI(TAG, "帧%" PRIu32 ": %s err=%+.2f rows=%u",
+                ESP_LOGI(TAG, "帧%" PRIu32 ": %s%s err=%+.2f rows=%u wide=%u",
                          frames, s_result.has_line ? "见线" : "丢线",
-                         s_result.error, s_result.black_rows);
+                         s_result.stable ? "(稳)" : "(抖)",
+                         s_result.error, s_result.black_rows, s_result.wide_black_rows);
             }
         }
     }
@@ -527,17 +542,7 @@ bool camera_line_ready(void)
 
 bool camera_line_stable(void)
 {
-    if (!s_streaming || s_stable_state != s_result.has_line) {
-        return false;   /* 状态还在翻转中，不可信 */
-    }
-    if (s_stable_state) {
-        /* 见线状态：首次见线后需等待 settle 时间，让画面/姿态稳定 */
-        const int64_t now_ms = esp_timer_get_time() / 1000;
-        if (now_ms - s_first_seen_ms < CAM_SETTLE_MS) {
-            return false;
-        }
-    }
-    return true;
+    return s_streaming && s_result.stable;
 }
 
 void camera_line_set_frame_cb(camera_line_frame_cb_t cb)
