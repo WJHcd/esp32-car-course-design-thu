@@ -15,11 +15,12 @@
  *   （walking.c 的 PD 控制器通过 LINE_KP 缩放适配该量纲）
  * ============================================================ */
 
-/* 摄像头流参数（ESP32-S3 USB Full Speed 带宽限制） */
+/* 摄像头流参数（ESP32-S3 USB Full Speed 带宽限制）
+ * 首选 320x240；摄像头不支持时自动协商回退（640x480 等），
+ * 检测与预览均按实际分辨率自适应 */
 #define CAM_FRAME_WIDTH    320
 #define CAM_FRAME_HEIGHT   240
 #define CAM_FRAME_FPS      30
-#define CAM_FRAME_FORMAT   UVC_FRAME_FORMAT_MJPEG
 
 /* 黑线检测阈值标定（现场按光照调整） */
 #define LINE_BLACK_Y_MAX   80    /* Y 亮度低于此值判为黑色 */
@@ -71,6 +72,12 @@ typedef void (*camera_line_frame_cb_t)(const uint8_t *rgb888, int width, int hei
  * 注意：回调在图像处理任务上下文中执行，内部勿做阻塞耗时的操作。
  */
 void camera_line_set_frame_cb(camera_line_frame_cb_t cb);
+
+/**
+ * @brief 开/关处理任务的周期统计日志（500ms 一条）
+ * ASCII 预览等需要干净串口输出的场景可关闭。
+ */
+void camera_line_set_stats_log(bool enable);
 
 /**
  * @brief 摄像头巡线结果是否"稳定可信"（任务二新增）

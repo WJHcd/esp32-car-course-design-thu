@@ -1,5 +1,5 @@
 ## IDF Component Manager Manifest File
 dependencies:
   idf: ">=5.0"
-  usb_host_uvc: "^1.0.3"
+  usb_host_uvc: "^2.5.2"
   espressif/esp_jpeg: "^1.0.0"

@@ -8,28 +8,36 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "usb/usb_host.h"
-#include "libuvc/libuvc.h"
-#include "libuvc_helper.h"
-#include "libuvc_adapter.h"
+#include "usb/uvc_host.h"
 #include "jpeg_decoder.h"
 
 static const char *TAG = "cam_line";
 
-/* ---------- 缓冲 ---------- */
-#define MJPEG_BUF_MAX    (64 * 1024)   /* MJPEG 单帧上限 */
-#define RGB_BUF_SIZE     (CAM_FRAME_WIDTH * CAM_FRAME_HEIGHT * 3)
-#define FRAME_QUEUE_LEN  2
+/* ---------- 缓冲 ----------
+ * 首选 320x240（camera_line.h），摄像头不支持时协商回退到更大分辨率
+ * （如 640x480 / 1280x720），因此解码缓冲按 720p 上限分配（仅占 PSRAM） */
+#define CAM_MAX_WIDTH     1280
+#define CAM_MAX_HEIGHT    720
+#define RGB_BUF_SIZE      (CAM_MAX_WIDTH * CAM_MAX_HEIGHT * 3)
+#define FRAME_QUEUE_LEN   2
 
-/* ---------- 稳定性判定（任务二新增）----------
+/* uvc_host 驱动缓冲参数 */
+#define UVC_FRAME_BUFFERS    3
+#define UVC_NUM_URBS         4
+#define UVC_URB_SIZE         (10 * 1024)
+#define UVC_OPEN_TIMEOUT_MS  5000
+#define UVC_OPEN_ATTEMPTS    10
+
+/* MJPEG 帧大小估算（经验：16bpp 原始尺寸 / 6 压缩比，下限 40KB） */
+#define MJPEG_SIZE_EST(w, h) (((w) * (h) * 2 / 6) > (40 * 1024) ? ((w) * (h) * 2 / 6) : (40 * 1024))
+/* 单帧合法上限，超出直接丢弃 */
+#define MJPEG_BUF_MAX        (512 * 1024)
+
+/* ---------- 稳定性判定 ----------
  * 帧率约 10~15fps：连续 N 帧一致才认为状态稳定；
  * 首次见线后再等 SETTLE_MS 让画面/车辆姿态稳定。 */
 #define CAM_STABLE_SAMPLES   3     /* 连续 3 帧一致 */
 #define CAM_SETTLE_MS        300   /* 见线后稳定等待 300ms */
-
-/* 摄像头筛选（0=不筛选） */
-#define CAM_VID 0
-#define CAM_PID 0
-#define CAM_SERIAL NULL
 
 typedef struct {
     uint8_t *data;
@@ -38,13 +46,22 @@ typedef struct {
 
 static QueueHandle_t s_frame_queue;
 static camera_line_result_t s_result;
-static volatile bool s_streaming;
-static camera_line_frame_cb_t s_frame_cb;   /* 帧回调（TFT 预览等） */
+static volatile bool s_streaming;          /* 已成功解码出帧 */
+static volatile bool s_connected;          /* UVC 流已打开 */
+static camera_line_frame_cb_t s_frame_cb;  /* 帧回调（串口/TFT 预览等） */
+static volatile bool s_stats_log_enabled = true;
 
 /* ---------- 稳定性判定状态 ---------- */
 static uint8_t s_line_run_len;      /* 当前 has_line 状态连续帧数 */
 static bool s_stable_state;         /* 已确认的稳定状态 */
 static int64_t s_first_seen_ms;     /* 首次见线时刻（用于 settle 等待） */
+
+/* ---------- uvc_host 驱动状态 ---------- */
+static uvc_host_stream_hdl_t s_stream;
+static uvc_host_stream_config_t s_stream_cfg;   /* 连接事件里填充格式后使用 */
+static volatile bool s_connect_pending;         /* 收到 DEVICE_CONNECTED，待开流 */
+static volatile bool s_disconnect_pending;      /* 收到 DEVICE_DISCONNECTED，待关流 */
+static TaskHandle_t s_uvc_task_handle;
 
 /* ============================================================
  * USB Host 库事件处理
@@ -70,7 +87,7 @@ static esp_err_t usb_host_init(void)
     if (err != ESP_OK) {
         return err;
     }
-    if (xTaskCreate(usb_lib_handler_task, "usb_events", 4096, NULL, 2, NULL) != pdPASS) {
+    if (xTaskCreate(usb_lib_handler_task, "usb_events", 4096, NULL, 4, NULL) != pdPASS) {
         usb_host_uninstall();
         return ESP_ERR_NO_MEM;
     }
@@ -78,19 +95,35 @@ static esp_err_t usb_host_init(void)
 }
 
 /* ============================================================
- * UVC 帧回调：只拷贝入队，不做耗时处理
+ * UVC 帧回调（驱动任务上下文）：
+ * 限频拷贝到 PSRAM 入队后立即归还缓冲，不做耗时处理。
+ * 640x480 JPEG 解码约 200ms+/帧，全帧率解码会占满单核，
+ * 因此采集侧限频到 ~3fps（巡线足够；调 FRAME_PROC_INTERVAL_MS 可改）。
  * ============================================================ */
-static void frame_callback(uvc_frame_t *frame, void *ptr)
+#define FRAME_PROC_INTERVAL_MS 300
+
+static bool uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
 {
-    (void)ptr;
+    (void)user_ctx;
+    static int64_t s_last_enqueue_us;
+    const int64_t now = esp_timer_get_time();
+    if (s_last_enqueue_us != 0 &&
+        now - s_last_enqueue_us < (int64_t)FRAME_PROC_INTERVAL_MS * 1000) {
+        return true;    /* 限频窗口内直接丢帧 */
+    }
+    s_last_enqueue_us = now;
+
+    if (frame->data_len == 0 || frame->data_len > MJPEG_BUF_MAX) {
+        return true;    /* 异常帧丢弃 */
+    }
     frame_item_t item = {
-        .data = heap_caps_malloc(frame->data_bytes, MALLOC_CAP_SPIRAM),
-        .len = frame->data_bytes,
+        .data = heap_caps_malloc(frame->data_len, MALLOC_CAP_SPIRAM),
+        .len = frame->data_len,
     };
     if (item.data == NULL) {
-        return;  /* 内存不足直接丢帧 */
+        return true;    /* 内存不足丢帧 */
     }
-    memcpy(item.data, frame->data, frame->data_bytes);
+    memcpy(item.data, frame->data, frame->data_len);
     if (xQueueSend(s_frame_queue, &item, 0) != pdTRUE) {
         /* 队列满：丢最旧帧防积压 */
         frame_item_t old;
@@ -98,6 +131,110 @@ static void frame_callback(uvc_frame_t *frame, void *ptr)
             heap_caps_free(old.data);
         }
         xQueueSend(s_frame_queue, &item, 0);
+    }
+    return true;    /* 数据已拷走，缓冲立即归还驱动 */
+}
+
+/* ============================================================
+ * 流事件回调（断开/错误不再 abort，2.5.2 行为）
+ * ============================================================ */
+static void uvc_stream_event_cb(const uvc_host_stream_event_data_t *event, void *user_ctx)
+{
+    (void)user_ctx;
+    switch (event->type) {
+    case UVC_HOST_TRANSFER_ERROR:
+        ESP_LOGE(TAG, "USB 传输错误: %s", esp_err_to_name(event->transfer_error.error));
+        break;
+    case UVC_HOST_DEVICE_DISCONNECTED:
+        ESP_LOGW(TAG, "摄像头已断开，等待重新接入 ...");
+        s_connected = false;
+        s_streaming = false;
+        s_disconnect_pending = true;
+        if (s_uvc_task_handle) {
+            xTaskNotifyGive(s_uvc_task_handle);
+        }
+        break;
+    case UVC_HOST_FRAME_BUFFER_OVERFLOW:
+        ESP_LOGW(TAG, "帧超出缓冲，已丢弃");
+        break;
+    case UVC_HOST_FRAME_BUFFER_UNDERFLOW:
+        ESP_LOGW(TAG, "无空闲帧缓冲，已丢弃");
+        break;
+    default:
+        break;
+    }
+}
+
+/* ============================================================
+ * 驱动事件回调：设备接入 → 枚举支持格式 → 选定 → 通知开流
+ * ============================================================ */
+static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void *user_ctx)
+{
+    (void)user_ctx;
+    if (event->type != UVC_HOST_DRIVER_EVENT_DEVICE_CONNECTED) {
+        return;
+    }
+    const uint8_t addr = event->device_connected.dev_addr;
+    const uint8_t index = event->device_connected.uvc_stream_index;
+    ESP_LOGI(TAG, "UVC 设备已连接 addr=%u index=%u", addr, index);
+
+    size_t num = event->device_connected.frame_info_num;
+    uvc_host_frame_info_t *list = heap_caps_calloc(num, sizeof(uvc_host_frame_info_t), MALLOC_CAP_SPIRAM);
+    if (list == NULL ||
+        uvc_host_get_frame_list(addr, index, (uvc_host_frame_info_t (*)[])list, &num) != ESP_OK) {
+        ESP_LOGE(TAG, "读取摄像头格式列表失败");
+        heap_caps_free(list);
+        return;
+    }
+
+    /* 选格式：优先 320x240，其次 480x320（像素量小、解码省 CPU），
+     * 再次 640x480，最后任意 MJPEG */
+    int pick_exact = -1, pick_480 = -1, pick_640 = -1, pick_any = -1;
+    for (size_t i = 0; i < num; i++) {
+        ESP_LOGI(TAG, "  支持: %s %ux%u",
+                 list[i].format == UVC_VS_FORMAT_MJPEG ? "MJPEG" : "非MJPEG",
+                 list[i].h_res, list[i].v_res);
+        if (list[i].format != UVC_VS_FORMAT_MJPEG) {
+            continue;
+        }
+        if (pick_any < 0) {
+            pick_any = i;
+        }
+        if (list[i].h_res == CAM_FRAME_WIDTH && list[i].v_res == CAM_FRAME_HEIGHT && pick_exact < 0) {
+            pick_exact = i;
+        }
+        if (list[i].h_res == 480 && list[i].v_res == 320 && pick_480 < 0) {
+            pick_480 = i;
+        }
+        if (list[i].h_res == 640 && list[i].v_res == 480 && pick_640 < 0) {
+            pick_640 = i;
+        }
+    }
+    const int pick = (pick_exact >= 0) ? pick_exact
+                   : (pick_480 >= 0) ? pick_480
+                   : (pick_640 >= 0) ? pick_640
+                   : pick_any;
+    if (pick < 0) {
+        ESP_LOGE(TAG, "摄像头不支持 MJPEG，无法使用");
+        heap_caps_free(list);
+        return;
+    }
+    ESP_LOGI(TAG, "选定格式: %ux%u MJPEG", list[pick].h_res, list[pick].v_res);
+    heap_caps_free(list);
+
+    s_stream_cfg.usb.dev_addr = addr;
+    s_stream_cfg.usb.uvc_stream_index = index;
+    s_stream_cfg.usb.vid = UVC_HOST_ANY_VID;
+    s_stream_cfg.usb.pid = UVC_HOST_ANY_PID;
+    s_stream_cfg.vs_format.h_res = list[pick].h_res;
+    s_stream_cfg.vs_format.v_res = list[pick].v_res;
+    s_stream_cfg.vs_format.fps = 0;             /* 设备默认帧率 */
+    s_stream_cfg.vs_format.format = UVC_VS_FORMAT_MJPEG;
+    s_stream_cfg.advanced.frame_size = MJPEG_SIZE_EST(list[pick].h_res, list[pick].v_res);
+
+    s_connect_pending = true;
+    if (s_uvc_task_handle) {
+        xTaskNotifyGive(s_uvc_task_handle);
     }
 }
 
@@ -109,12 +246,12 @@ static void frame_callback(uvc_frame_t *frame, void *ptr)
  * 画面上部是远处背景/桌面。因此只扫描最底部 CAM_SCAN_BOTTOM_PCT% 的行，
  * 避免远处暗色物体被误判为线。
  * ============================================================ */
-static void detect_line_centroid(const uint8_t *rgb, camera_line_result_t *out)
+static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_result_t *out)
 {
-    const int w = CAM_FRAME_WIDTH;
-    const int h = CAM_FRAME_HEIGHT;
     const int y_start = h - h * CAM_SCAN_BOTTOM_PCT / 100;  /* 只扫最底部 */
     const int row_step = 2;             /* 窗口小了，采样密一点 */
+    /* 黑像素阈值按实际宽度缩放（阈值按 320 宽标定） */
+    const uint32_t min_black = (uint32_t)LINE_MIN_BLACK_PIX * w / CAM_FRAME_WIDTH;
 
     uint32_t black_sum_x = 0;
     uint32_t black_count = 0;
@@ -135,13 +272,13 @@ static void detect_line_centroid(const uint8_t *rgb, camera_line_result_t *out)
                 row_black++;
             }
         }
-        if (row_black >= LINE_MIN_BLACK_PIX / 4) {
+        if (row_black >= min_black / 4) {
             rows_with_line++;
         }
     }
 
     out->black_rows = rows_with_line;
-    if (black_count < LINE_MIN_BLACK_PIX) {
+    if (black_count < min_black) {
         out->has_line = false;
         out->error = 0.0f;
         return;
@@ -175,28 +312,44 @@ static void processing_task(void *args)
             continue;
         }
 
-        esp_jpeg_image_cfg_t jpeg_cfg = {
-            .indata = item.data,
-            .indata_size = item.len,
-            .outbuf = rgb_buf,
-            .outbuf_size = RGB_BUF_SIZE,
-            .out_format = JPEG_IMAGE_FORMAT_RGB888,
-            .out_scale = JPEG_IMAGE_SCALE_0,
+        /* 解码输出缩放：摄像头分辨率高于 320x240 时按 1/2 输出
+         * （480x320→240x160，兼顾解码 CPU 与检测精度）。个别相机
+         * 缩放档不支持时逐级回退。 */
+        esp_jpeg_image_scale_t try_scales[3] = {
+            JPEG_IMAGE_SCALE_1_2, JPEG_IMAGE_SCALE_1_4, JPEG_IMAGE_SCALE_0,
         };
+        int n_scales = (s_stream_cfg.vs_format.h_res > CAM_FRAME_WIDTH) ? 3 : 1;
+        esp_err_t err = ESP_FAIL;
         esp_jpeg_image_output_t jpeg_out;
-        esp_err_t err = esp_jpeg_decode(&jpeg_cfg, &jpeg_out);
+        const int64_t t0 = esp_timer_get_time();
+        for (int si = 0; si < n_scales && err != ESP_OK; si++) {
+            esp_jpeg_image_cfg_t jpeg_cfg = {
+                .indata = item.data,
+                .indata_size = item.len,
+                .outbuf = rgb_buf,
+                .outbuf_size = RGB_BUF_SIZE,
+                .out_format = JPEG_IMAGE_FORMAT_RGB888,
+                .out_scale = try_scales[si],
+            };
+            err = esp_jpeg_decode(&jpeg_cfg, &jpeg_out);
+        }
+        const int decode_ms = (int)((esp_timer_get_time() - t0) / 1000);
         heap_caps_free(item.data);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "jpeg decode failed: %s", esp_err_to_name(err));
             continue;
         }
-
-        /* 帧回调：把 RGB888 帧转发给外部（如 TFT 画面预览） */
-        if (s_frame_cb) {
-            s_frame_cb(rgb_buf, CAM_FRAME_WIDTH, CAM_FRAME_HEIGHT);
+        if (jpeg_out.width > CAM_MAX_WIDTH || jpeg_out.height > CAM_MAX_HEIGHT) {
+            ESP_LOGW(TAG, "分辨率 %ux%u 超出解码缓冲，丢弃", jpeg_out.width, jpeg_out.height);
+            continue;
         }
 
-        detect_line_centroid(rgb_buf, &s_result);
+        /* 帧回调：把 RGB888 帧转发给外部（串口 ASCII 预览等） */
+        if (s_frame_cb) {
+            s_frame_cb(rgb_buf, jpeg_out.width, jpeg_out.height);
+        }
+
+        detect_line_centroid(rgb_buf, jpeg_out.width, jpeg_out.height, &s_result);
 
         /*
          * 稳定性判定：has_line 连续 CAM_STABLE_SAMPLES 帧一致才更新
@@ -224,75 +377,89 @@ static void processing_task(void *args)
         s_streaming = true;
 
         frames++;
+        /* 解码耗时观测：无论统计日志开关，每 2s 打一条（调参用） */
+        {
+            static int64_t last_perf_log;
+            static uint32_t decode_ms_sum;
+            static uint32_t decode_cnt;
+            decode_ms_sum += decode_ms;
+            decode_cnt++;
+            if (esp_timer_get_time() - last_perf_log > 2000000) {
+                last_perf_log = esp_timer_get_time();
+                ESP_LOGI(TAG, "perf: 解码 %dms/帧, 均值 %" PRIu32 "ms, 已处理 %" PRIu32,
+                         decode_ms, decode_ms_sum / decode_cnt, frames);
+                decode_ms_sum = 0;
+                decode_cnt = 0;
+            }
+        }
         if (esp_timer_get_time() - last_log > 500000) {  /* 500ms 打印一次 */
             last_log = esp_timer_get_time();
-            ESP_LOGI(TAG, "帧%" PRIu32 ": %s err=%+.2f rows=%u",
-                     frames, s_result.has_line ? "见线" : "丢线",
-                     s_result.error, s_result.black_rows);
+            if (s_stats_log_enabled) {
+                ESP_LOGI(TAG, "帧%" PRIu32 ": %s err=%+.2f rows=%u",
+                         frames, s_result.has_line ? "见线" : "丢线",
+                         s_result.error, s_result.black_rows);
+            }
         }
     }
 }
 
 /* ============================================================
- * UVC 初始化 + 流启动（阻塞等待摄像头，放独立任务避免卡 app_main）
+ * UVC 流管理任务：等待接入 → 开流 → 等断开 → 关流 → 循环
  * ============================================================ */
 static void uvc_task(void *args)
 {
     (void)args;
-    uvc_context_t *ctx = NULL;
-    uvc_device_t *dev = NULL;
-    uvc_device_handle_t *devh = NULL;
-    uvc_stream_ctrl_t ctrl;
-
-    ESP_LOGI(TAG, "等待 USB 摄像头连接 ...");
-    uvc_error_t res = uvc_init(&ctx, NULL);
-    if (res < 0) {
-        ESP_LOGE(TAG, "uvc_init: %s", uvc_error_string(res));
-        vTaskDelete(NULL);
-        return;
-    }
-
     while (1) {
-        res = uvc_find_device(ctx, &dev, CAM_VID, CAM_PID, CAM_SERIAL);
-        if (res >= 0) {
-            break;
+        /* 等待驱动"设备已连接"事件 */
+        while (!s_connect_pending) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    ESP_LOGI(TAG, "找到摄像头");
+        s_connect_pending = false;
 
-    res = uvc_open(dev, &devh);
-    if (res < 0) {
-        ESP_LOGE(TAG, "uvc_open: %s", uvc_error_string(res));
-        vTaskDelete(NULL);
-        return;
-    }
-
-    res = uvc_get_stream_ctrl_format_size(devh, &ctrl,
-                                          UVC_FRAME_FORMAT_MJPEG,
-                                          CAM_FRAME_WIDTH, CAM_FRAME_HEIGHT, CAM_FRAME_FPS);
-    if (res < 0) {
-        ESP_LOGW(TAG, "320x240@30 协商失败，尝试 640x480@15");
-        res = uvc_get_stream_ctrl_format_size(devh, &ctrl,
-                                              UVC_FRAME_FORMAT_MJPEG,
-                                              640, 480, 15);
-        if (res < 0) {
-            ESP_LOGE(TAG, "流协商失败: %s", uvc_error_string(res));
-            vTaskDelete(NULL);
-            return;
+        uvc_host_stream_hdl_t stream = NULL;
+        bool opened = false;
+        for (int attempt = 1; attempt <= UVC_OPEN_ATTEMPTS && !opened; attempt++) {
+            ESP_LOGI(TAG, "打开 UVC 流（第 %d/%d 次尝试）...", attempt, UVC_OPEN_ATTEMPTS);
+            esp_err_t err = uvc_host_stream_open(&s_stream_cfg,
+                                                 pdMS_TO_TICKS(UVC_OPEN_TIMEOUT_MS), &stream);
+            if (err == ESP_OK) {
+                err = uvc_host_stream_start(stream);
+                if (err == ESP_OK) {
+                    opened = true;
+                    break;
+                }
+                ESP_LOGE(TAG, "uvc_host_stream_start: %s", esp_err_to_name(err));
+                uvc_host_stream_close(stream);
+            } else {
+                ESP_LOGE(TAG, "uvc_host_stream_open: %s", esp_err_to_name(err));
+            }
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
-    }
 
-    res = uvc_start_streaming(devh, &ctrl, frame_callback, NULL, 0);
-    if (res < 0) {
-        ESP_LOGE(TAG, "uvc_start_streaming: %s", uvc_error_string(res));
-        vTaskDelete(NULL);
-        return;
-    }
-    ESP_LOGI(TAG, "摄像头采集已启动");
+        if (!opened) {
+            ESP_LOGE(TAG, "摄像头打开失败，请重新插拔摄像头重试");
+            continue;
+        }
+        s_stream = stream;
+        s_connected = true;
+        s_streaming = false;
+        ESP_LOGI(TAG, "摄像头采集已启动（%ux%u MJPEG）",
+                 s_stream_cfg.vs_format.h_res, s_stream_cfg.vs_format.v_res);
 
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        /* 等待断开事件 */
+        while (!s_disconnect_pending) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
+        s_disconnect_pending = false;
+
+        /* 让处理任务消化完队列里的旧帧再关流 */
+        vTaskDelay(pdMS_TO_TICKS(300));
+        uvc_host_stream_stop(stream);
+        esp_err_t err = uvc_host_stream_close(stream);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "uvc_host_stream_close: %s", esp_err_to_name(err));
+        }
+        s_stream = NULL;
     }
 }
 
@@ -311,10 +478,35 @@ bool camera_line_init(void)
         return false;
     }
 
-    if (xTaskCreatePinnedToCore(processing_task, "img_proc", 8192, NULL, 5, NULL, 0) != pdPASS) {
+    /* uvc_host 驱动（自带后台事件任务） */
+    const uvc_host_driver_config_t drv_cfg = {
+        .driver_task_stack_size = 4096,
+        .driver_task_priority = 6,
+        .xCoreID = tskNO_AFFINITY,
+        .create_background_task = true,
+        .event_cb = uvc_driver_event_cb,
+        .user_ctx = NULL,
+    };
+    err = uvc_host_install(&drv_cfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "uvc_host_install: %s", esp_err_to_name(err));
         return false;
     }
-    if (xTaskCreate(uvc_task, "uvc", 6144, NULL, 3, NULL) != pdPASS) {
+
+    /* 流配置中固定不变的部分 */
+    s_stream_cfg.event_cb = uvc_stream_event_cb;
+    s_stream_cfg.frame_cb = uvc_frame_cb;
+    s_stream_cfg.user_ctx = NULL;
+    s_stream_cfg.advanced.number_of_frame_buffers = UVC_FRAME_BUFFERS;
+    s_stream_cfg.advanced.number_of_urbs = UVC_NUM_URBS;
+    s_stream_cfg.advanced.urb_size = UVC_URB_SIZE;
+    s_stream_cfg.advanced.frame_heap_caps = MALLOC_CAP_SPIRAM;
+
+    /* 解码任务固定在 CPU1，避免挤占 CPU0 上的 USB 主机与主任务 */
+    if (xTaskCreatePinnedToCore(processing_task, "img_proc", 10240, NULL, 5, NULL, 1) != pdPASS) {
+        return false;
+    }
+    if (xTaskCreate(uvc_task, "uvc", 6144, NULL, 3, &s_uvc_task_handle) != pdPASS) {
         return false;
     }
     return true;
@@ -351,4 +543,9 @@ bool camera_line_stable(void)
 void camera_line_set_frame_cb(camera_line_frame_cb_t cb)
 {
     s_frame_cb = cb;
+}
+
+void camera_line_set_stats_log(bool enable)
+{
+    s_stats_log_enabled = enable;
 }

@@ -1,0 +1,17 @@
+# task2 摄像头巡线工程默认配置
+# 说明：build.bat 的 set-target 会从本文件重新生成 sdkconfig，
+#       摄像头相关关键配置必须写在这里，直接改 sdkconfig 会被冲掉。
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# 板载 ESP32-S3 为 16MB Octal PSRAM（AP_1v8），
+# 摄像头 RGB/MJPEG 缓冲均从 SPIRAM 分配，必须开启
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# UVC 摄像头配置描述符普遍超过 256 字节（官方示例用 4096），
+# 避免枚举阶段 Configuration descriptor larger than control transfer max length
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=4096
+CONFIG_FREERTOS_HZ=1000
+CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y

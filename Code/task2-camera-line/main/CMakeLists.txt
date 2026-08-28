@@ -7,7 +7,7 @@
 #   encoder.c     —— 编码器测速（TFT 显示用）
 #   tft_st7735.c  —— TFT 显示（转速 + 距离）
 idf_component_register(
-    SRCS "main.c" "camera_line.c" "ultrasonic.c" "walking.c" "motor.c"
+    SRCS "ascii_preview.c" "main.c" "camera_line.c" "ultrasonic.c" "walking.c" "motor.c"
          "encoder.c" "tft_st7735.c"
          "test_ultrasonic.c"
     INCLUDE_DIRS "."

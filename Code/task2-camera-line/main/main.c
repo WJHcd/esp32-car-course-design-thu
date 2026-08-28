@@ -6,6 +6,7 @@
 #include "ultrasonic.h"
 #include "walking.h"
 #include "camera_line.h"
+#include "ascii_preview.h"
 #include "encoder.h"
 #include "tft_st7735.h"
 #include "test.h"
@@ -26,8 +27,9 @@
  *   3 = 平移方向自检   （驱动电机；着地观察平移/前进方向）
  *   4 = TFT 面板自检   （仅屏幕，红绿蓝黑循环）
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
+ *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  * ============================================================ */
-#define TASK2_MODE  5
+#define TASK2_MODE  6
 
 static const char *TAG = "task2";
 
@@ -152,6 +154,40 @@ static void app_camera_preview(void)
 }
 
 /*
+ * 摄像头 ASCII 串口预览模式：不依赖 TFT，每秒把摄像头画面
+ * 降采样成 64x24 字符画打印到串口监视器（80 列终端可完整显示）。
+ *   '#' = 低于 LINE_BLACK_Y_MAX 判黑的像素（即算法看到的黑线）
+ *   其他字符 = 亮度渐变（空格=全白，*=高亮）
+ * 用于确认摄像头出帧/成像/黑线阈值是否合理。
+ */
+static void app_camera_ascii_preview(void)
+{
+    printf("\n========== 摄像头 ASCII 串口预览 ==========\n");
+    printf("每 %d 秒打印一帧 %dx%d 字符画：\n",
+           ASCII_PREVIEW_INTERVAL_MS / 1000,
+           ASCII_PREVIEW_WIDTH, ASCII_PREVIEW_HEIGHT);
+    printf("  '#' = 判为黑线的像素（阈值 LINE_BLACK_Y_MAX=%d）\n", LINE_BLACK_Y_MAX);
+    printf("  其余字符按亮度渐变：空格=全白，*=高亮\n");
+    printf("判读：无画面/全空 = 检查摄像头接线与供电；\n");
+    printf("      黑线应显示为一串 '#'；画面颠倒/镜像 = 调整摄像头安装。\n\n");
+
+    if (!camera_line_init()) {
+        ESP_LOGE(TAG, "摄像头初始化失败");
+        return;
+    }
+    camera_line_set_stats_log(false);   /* 关周期日志，保持字符画完整 */
+    camera_line_set_frame_cb(ascii_preview_on_frame);
+
+    while (1) {
+        camera_line_result_t res;
+        camera_line_get(&res);
+        printf("状态: %s err=%+.2f rows=%u\n",
+               res.has_line ? "见线" : "丢线", res.error, res.black_rows);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+/*
  * 综合模式：摄像头巡线 + 超声波避障，20ms 控制周期。
  * 巡线误差来自 camera_line（黑线质心，[-1,+1]），
  * walking.c 的 PD 增益通过 CAM_ERR_SCALE 适配该量纲。
@@ -227,6 +263,8 @@ void app_main(void)
     app_tft_panel_test();
 #elif TASK2_MODE == 5
     app_camera_preview();
+#elif TASK2_MODE == 6
+    app_camera_ascii_preview();
 #else
     app_integrated();
 #endif
