@@ -25,20 +25,28 @@
  *   2 = 超声检测测试   （test_ultrasonic 标定统计）
  *   3 = 平移方向自检   （驱动电机；着地观察平移/前进方向）
  *   4 = TFT 面板自检   （仅屏幕，红绿蓝黑循环）
+ *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  * ============================================================ */
-#define TASK2_MODE  1
+#define TASK2_MODE  5
 
 static const char *TAG = "task2";
 
 /*
- * 摄像头巡线测试模式：只初始化摄像头和打印，不驱动电机、不读超声。
+ * 摄像头巡线测试模式：只初始化摄像头和屏幕显示，不驱动电机、不读超声。
  * 用于标定黑线阈值（LINE_BLACK_Y_MAX）和确认误差方向。
+ * 信息显示在小车 TFT 屏幕上（无需电脑串口）：
+ *   A/B/C 行：三路电机 RPM（未接编码器脉冲时为 0）
+ *   D 行：超声距离（本模式未初始化超声，显示 ---）
+ *   E 行：摄像头巡线状态 E:+0.12 / E:LOST
  */
 static void app_camera_line_test(void)
 {
     printf("\n========== 摄像头巡线测试模式 ==========\n");
-    printf("只采集图像并打印黑线误差；不驱动电机。\n");
-    printf("把车对准黑线前后移动/左右平移，观察 err 变化（左负右正）。\n\n");
+    printf("黑线误差显示在小车 TFT 屏幕第 5 行（E:xx）。\n");
+    printf("把车对准黑线前后移动/左右平移，观察 E 值变化（左负右正）。\n\n");
+
+    tft_st7735_init();
+    tft_st7735_start_telemetry();
 
     if (!camera_line_init()) {
         ESP_LOGE(TAG, "摄像头初始化失败");
@@ -48,16 +56,9 @@ static void app_camera_line_test(void)
     while (1) {
         camera_line_result_t res;
         camera_line_get(&res);
-        if (camera_line_ready()) {
-            if (res.has_line) {
-                printf("err=%+.2f rows=%u\n", res.error, res.black_rows);
-            } else {
-                printf("丢线（画面下半部无黑线）\n");
-            }
-        } else {
-            printf("等待摄像头出帧 ...\n");
-        }
-        vTaskDelay(pdMS_TO_TICKS(300));
+        /* 把巡线状态推给屏幕显示 */
+        tft_st7735_set_line(res.has_line, res.error);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -125,6 +126,29 @@ static void app_tft_panel_test(void)
     printf("将循环显示：红 -> 绿 -> 蓝 -> 黑，每种 1 秒。\n");
     tft_st7735_init();
     tft_st7735_panel_test();
+}
+
+/*
+ * 摄像头画面预览模式：把 UVC 摄像头画面实时显示到 TFT 屏幕，
+ * 用于确认摄像头是否出帧/成像正常。只初始化摄像头和屏幕，
+ * 不驱动电机、不读超声。全屏刷新约 3fps（SPI 1MHz 限制）。
+ */
+static void app_camera_preview(void)
+{
+    printf("\n========== 摄像头画面预览模式 ==========\n");
+    printf("摄像头画面实时显示在 TFT 屏幕（约 3fps）。\n");
+    printf("屏幕有画面 = 摄像头正常；仍白屏 = 检查接线/供电。\n\n");
+
+    tft_st7735_init();              /* 含红绿蓝黑上电自检 */
+    if (!camera_line_init()) {
+        ESP_LOGE(TAG, "摄像头初始化失败");
+        return;
+    }
+    camera_line_set_frame_cb(tft_st7735_show_camera_frame);
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 /*
@@ -201,6 +225,8 @@ void app_main(void)
     app_strafe_test();
 #elif TASK2_MODE == 4
     app_tft_panel_test();
+#elif TASK2_MODE == 5
+    app_camera_preview();
 #else
     app_integrated();
 #endif

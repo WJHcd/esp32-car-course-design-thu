@@ -20,6 +20,12 @@ static const char *TAG = "cam_line";
 #define RGB_BUF_SIZE     (CAM_FRAME_WIDTH * CAM_FRAME_HEIGHT * 3)
 #define FRAME_QUEUE_LEN  2
 
+/* ---------- 稳定性判定（任务二新增）----------
+ * 帧率约 10~15fps：连续 N 帧一致才认为状态稳定；
+ * 首次见线后再等 SETTLE_MS 让画面/车辆姿态稳定。 */
+#define CAM_STABLE_SAMPLES   3     /* 连续 3 帧一致 */
+#define CAM_SETTLE_MS        300   /* 见线后稳定等待 300ms */
+
 /* 摄像头筛选（0=不筛选） */
 #define CAM_VID 0
 #define CAM_PID 0
@@ -33,6 +39,12 @@ typedef struct {
 static QueueHandle_t s_frame_queue;
 static camera_line_result_t s_result;
 static volatile bool s_streaming;
+static camera_line_frame_cb_t s_frame_cb;   /* 帧回调（TFT 预览等） */
+
+/* ---------- 稳定性判定状态 ---------- */
+static uint8_t s_line_run_len;      /* 当前 has_line 状态连续帧数 */
+static bool s_stable_state;         /* 已确认的稳定状态 */
+static int64_t s_first_seen_ms;     /* 首次见线时刻（用于 settle 等待） */
 
 /* ============================================================
  * USB Host 库事件处理
@@ -92,15 +104,17 @@ static void frame_callback(uvc_frame_t *frame, void *ptr)
 /* ============================================================
  * 黑线质心检测（RGB888）
  *
- * 策略：只扫描画面下半部分（车头前方地面），逐行统计黑色像素，
- * 对所有黑像素求 X 质心。下半部分避开地平线/远处干扰。
+ * 策略（2026-08-28 按实车安装几何修改）：
+ * 摄像头装车顶、俯角小 → 黑线只出现在画面【最底部】（车前近处地面），
+ * 画面上部是远处背景/桌面。因此只扫描最底部 CAM_SCAN_BOTTOM_PCT% 的行，
+ * 避免远处暗色物体被误判为线。
  * ============================================================ */
 static void detect_line_centroid(const uint8_t *rgb, camera_line_result_t *out)
 {
     const int w = CAM_FRAME_WIDTH;
     const int h = CAM_FRAME_HEIGHT;
-    const int y_start = h / 2;          /* 只扫下半幅 */
-    const int row_step = 4;             /* 隔行采样，减负 */
+    const int y_start = h - h * CAM_SCAN_BOTTOM_PCT / 100;  /* 只扫最底部 */
+    const int row_step = 2;             /* 窗口小了，采样密一点 */
 
     uint32_t black_sum_x = 0;
     uint32_t black_count = 0;
@@ -177,7 +191,36 @@ static void processing_task(void *args)
             continue;
         }
 
+        /* 帧回调：把 RGB888 帧转发给外部（如 TFT 画面预览） */
+        if (s_frame_cb) {
+            s_frame_cb(rgb_buf, CAM_FRAME_WIDTH, CAM_FRAME_HEIGHT);
+        }
+
         detect_line_centroid(rgb_buf, &s_result);
+
+        /*
+         * 稳定性判定：has_line 连续 CAM_STABLE_SAMPLES 帧一致才更新
+         * s_stable_state；首次见线后记录时刻供 settle 等待。
+         */
+        {
+            static bool last_raw = false;
+            if (s_result.has_line == last_raw) {
+                if (s_line_run_len < 255) {
+                    s_line_run_len++;
+                }
+            } else {
+                last_raw = s_result.has_line;
+                s_line_run_len = 1;
+            }
+            if (s_line_run_len >= CAM_STABLE_SAMPLES &&
+                s_stable_state != s_result.has_line) {
+                s_stable_state = s_result.has_line;
+                if (s_stable_state) {
+                    s_first_seen_ms = esp_timer_get_time() / 1000;
+                }
+            }
+        }
+
         s_streaming = true;
 
         frames++;
@@ -288,4 +331,24 @@ void camera_line_get(camera_line_result_t *out)
 bool camera_line_ready(void)
 {
     return s_streaming;
+}
+
+bool camera_line_stable(void)
+{
+    if (!s_streaming || s_stable_state != s_result.has_line) {
+        return false;   /* 状态还在翻转中，不可信 */
+    }
+    if (s_stable_state) {
+        /* 见线状态：首次见线后需等待 settle 时间，让画面/姿态稳定 */
+        const int64_t now_ms = esp_timer_get_time() / 1000;
+        if (now_ms - s_first_seen_ms < CAM_SETTLE_MS) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void camera_line_set_frame_cb(camera_line_frame_cb_t cb)
+{
+    s_frame_cb = cb;
 }

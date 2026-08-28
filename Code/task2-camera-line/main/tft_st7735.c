@@ -56,6 +56,12 @@ static const glyph_t s_glyphs[] = {
     { 'M', {0x7F, 0x02, 0x0C, 0x02, 0x7F} },
     { 'P', {0x7F, 0x09, 0x09, 0x09, 0x06} },
     { 'R', {0x7F, 0x09, 0x19, 0x29, 0x46} },
+    { 'E', {0x7F, 0x49, 0x49, 0x49, 0x41} },
+    { 'L', {0x7F, 0x40, 0x40, 0x40, 0x40} },
+    { 'O', {0x3E, 0x41, 0x41, 0x41, 0x3E} },
+    { 'S', {0x46, 0x49, 0x49, 0x49, 0x31} },
+    { 'T', {0x01, 0x01, 0x7F, 0x01, 0x01} },
+    { '+', {0x08, 0x08, 0x3E, 0x08, 0x08} },
     { ':', {0x00, 0x36, 0x36, 0x00, 0x00} },
     { '-', {0x08, 0x08, 0x08, 0x08, 0x08} },
     { ' ', {0x00, 0x00, 0x00, 0x00, 0x00} },
@@ -66,6 +72,9 @@ static volatile uint16_t s_distance_cm = ULTRASONIC_INVALID;
 static uint16_t s_distance_samples[3];
 static uint8_t s_distance_sample_count;
 static uint8_t s_distance_next_index;
+/* 摄像头巡线状态（任务二）：主循环写入，TFT 任务读取显示 */
+static volatile bool s_line_has;
+static volatile float s_line_error;
 
 static void tft_write(bool is_data, const void *data, size_t length)
 {
@@ -141,7 +150,12 @@ static const uint8_t *tft_find_glyph(char ch)
 
 static void tft_draw_char(uint16_t x, uint16_t y, char ch, uint16_t fg)
 {
-    enum { SCALE = 2, GLYPH_W = 5 * SCALE, GLYPH_H = 7 * SCALE };
+    /*
+     * SCALE=1：原始 5x7 字库直接绘制（字符 5x7 像素、步进 6）。
+     * 之前 SCALE=2 时每行高 14px、5 行占 148px 超出 160px 屏高，
+     * 第 5 行（E 行）被裁掉。改 1 倍后 5 行只需 ~75px，全部可见。
+     */
+    enum { SCALE = 1, GLYPH_W = 5 * SCALE, GLYPH_H = 7 * SCALE };
     uint8_t pixels[GLYPH_W * GLYPH_H * 2];
     const uint8_t *glyph = tft_find_glyph(ch);
 
@@ -161,9 +175,47 @@ static void tft_draw_char(uint16_t x, uint16_t y, char ch, uint16_t fg)
 
 static void tft_draw_text(uint16_t x, uint16_t y, const char *text, uint16_t color)
 {
-    while (*text != '\0' && x + 10 <= TFT_WIDTH) {
+    while (*text != '\0' && x + 6 <= TFT_WIDTH) {
         tft_draw_char(x, y, *text++, color);
-        x += 11;
+        x += 6;
+    }
+}
+
+void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_h)
+{
+    if (s_spi == NULL || rgb888 == NULL || frame_w <= 0 || frame_h <= 0) {
+        return;
+    }
+
+    /*
+     * 中央裁剪保持纵横比：源区域宽高比 = 128/160（TFT 竖屏）。
+     * 对 320x240 输入：src_w = 240*128/160 = 192，左右各裁 64px，
+     * 高方向全取。点采样降采样，内容完整可见、不变形。
+     */
+    const int src_w = frame_h * TFT_WIDTH / TFT_HEIGHT;
+    if (src_w > frame_w || src_w <= 0) {
+        return;
+    }
+    const int src_x0 = (frame_w - src_w) / 2;
+
+    uint8_t pixels[TFT_WIDTH * 2];   /* 一行 128 像素 RGB565，高字节在前 */
+    tft_set_window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
+
+    for (int dy = 0; dy < TFT_HEIGHT; dy++) {
+        const int sy = dy * frame_h / TFT_HEIGHT;
+        const uint8_t *row = rgb888 + (size_t)sy * (size_t)frame_w * 3;
+        for (int dx = 0; dx < TFT_WIDTH; dx++) {
+            const int sx = src_x0 + dx * src_w / TFT_WIDTH;
+            const uint8_t *px = row + (size_t)sx * 3;
+            const uint16_t r5 = px[0] >> 3;
+            const uint16_t g6 = px[1] >> 2;
+            const uint16_t b5 = px[2] >> 3;
+            /* 该屏 R/B 物理互换：发送时交换 R/B 位，屏幕颜色才正确 */
+            const uint16_t color = (uint16_t)((b5 << 11) | (g6 << 5) | r5);
+            pixels[dx * 2]     = (uint8_t)(color >> 8);
+            pixels[dx * 2 + 1] = (uint8_t)color;
+        }
+        tft_write(true, pixels, sizeof(pixels));
     }
 }
 
@@ -181,19 +233,28 @@ static void tft_draw_telemetry(void)
     const uint16_t distance = s_distance_cm;
     char line[16];
 
+    /* SCALE=1 后每行高 7px、行距 8px：5 行占 y=8~152，全部在屏内 */
     snprintf(line, sizeof(line), "A:%04dRPM", rpm_for_display(rpm.rpm[MOTOR_A], rpm.valid[MOTOR_A]));
-    tft_draw_text(8, 16, line, TFT_COLOR_RED);
+    tft_draw_text(8, 8, line, TFT_COLOR_RED);
     snprintf(line, sizeof(line), "B:%04dRPM", rpm_for_display(rpm.rpm[MOTOR_B], rpm.valid[MOTOR_B]));
-    tft_draw_text(8, 48, line, TFT_COLOR_GREEN);
+    tft_draw_text(8, 24, line, TFT_COLOR_GREEN);
     snprintf(line, sizeof(line), "C:%04dRPM", rpm_for_display(rpm.rpm[MOTOR_C], rpm.valid[MOTOR_C]));
-    tft_draw_text(8, 80, line, TFT_COLOR_BLUE);
+    tft_draw_text(8, 40, line, TFT_COLOR_BLUE);
 
     if (distance == ULTRASONIC_INVALID) {
         strcpy(line, "D:---CM");
     } else {
         snprintf(line, sizeof(line), "D:%03uCM", (unsigned)distance);
     }
-    tft_draw_text(8, 116, line, TFT_COLOR_YELLOW);
+    tft_draw_text(8, 56, line, TFT_COLOR_YELLOW);
+
+    /* 第 5 行：摄像头巡线状态（任务二） */
+    if (s_line_has) {
+        snprintf(line, sizeof(line), "E:%+.2f", (double)s_line_error);
+    } else {
+        strcpy(line, "E:LOST");
+    }
+    tft_draw_text(8, 72, line, TFT_COLOR_WHITE);
 }
 
 static void tft_task(void *unused)
@@ -369,4 +430,10 @@ void tft_st7735_set_distance(uint16_t distance_cm)
     if (values[1] > values[2]) { uint16_t t = values[1]; values[1] = values[2]; values[2] = t; }
     if (values[0] > values[1]) { uint16_t t = values[0]; values[0] = values[1]; values[1] = t; }
     s_distance_cm = values[1];
+}
+
+void tft_st7735_set_line(bool has_line, float error)
+{
+    s_line_has = has_line;
+    s_line_error = error;
 }
