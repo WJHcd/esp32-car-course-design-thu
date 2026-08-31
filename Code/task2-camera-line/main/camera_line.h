@@ -21,21 +21,21 @@
  *
  * 设计对齐任务一红外巡线（LQ-R4CHV 四路，误差公式
  * E = (-3a - b + c + 3d) / count，a/b/c/d 为左外→右外）：
- *   - 扫描带中心 50% ≈ 红外阵列的安装高度（实测对齐）；
+ *   - 扫描带中心 60% ≈ 红外阵列的安装高度（实测对齐）；
  *   - 扫描宽度 40% ≈ 红外阵列的物理宽度（约 40% 画面宽）；
  *   - 窗口内逐列视作虚拟探头，误差 = 命中列位置的归一化均值
  *     （红外公式的连续推广），|error|=1 对应红外最外侧探头处。
  * ============================================================ */
 
 /* 扫描位置：扫描带中心距画面【底部】的高度百分比（实测 50 ≈ 红外位置） */
-#define CAM_SCAN_CENTER_FROM_BOTTOM_PCT   50
+#define CAM_SCAN_CENTER_FROM_BOTTOM_PCT   60
 /* 扫描带高度：以扫描中心为基准的总高度百分比（模拟红外阵列的安装余量） */
 #define CAM_SCAN_BAND_HEIGHT_PCT           8
 /* 扫描宽度：画面宽度的百分比，水平居中（40 ≈ 红外阵列宽度） */
 #define CAM_SCAN_WIDTH_PCT                40
 /* 二值化阈值：rgb2gray 后灰度低于此值判黑（0~255，
  * 对应 MATLAB imbinarize(I,T) 的全局阈值用法；光照变强适当调大） */
-#define CAM_BIN_THRESHOLD                 80
+#define CAM_BIN_THRESHOLD                 120
 /* 见线最少黑色列数：窗口内判黑列少于此值视为丢线（"至少一路见线"的相机版） */
 #define CAM_LINE_MIN_COLUMNS               3
 

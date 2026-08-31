@@ -16,8 +16,8 @@
  * 测试版故意低速、无自动找线：识别不到黑线时立即停止，见线后再继续。
  * 黑线在右侧(error>0)时应给正 turn；若实车确实修正到反方向，只把 SIGN 改 -1。
  */
-#define CAM_TEST_FORWARD_PCT       15
-#define CAM_TEST_MIN_FORWARD_PCT   11
+#define CAM_TEST_FORWARD_PCT       10
+#define CAM_TEST_MIN_FORWARD_PCT    8
 #define CAM_TEST_TURN_GAIN         13.0f
 #define CAM_TEST_MAX_TURN_PCT      12
 #define CAM_TEST_STEERING_SIGN      (+1)
