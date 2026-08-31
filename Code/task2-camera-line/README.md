@@ -18,8 +18,8 @@
 python -m esptool --chip esp32s3 -p COM8 -b 115200 --before no_reset --after hard_reset write_flash @flash_args
 ```
 
-运行模式在 `main.c` 的 `TASK2_MODE` 切换：`6` = 摄像头 ASCII 串口预览（当前，验证摄像头用）、
-`0` = 综合跑车、`1` = 巡线测试（不动电机）、`5` = TFT 预览等，详见 `main.c` 头部注释。
+运行模式在 `main.c` 的 `TASK2_MODE` 切换：`7` = 摄像头纯巡线实车测试（当前，无超声/避障/自动找线）、
+`0` = 综合跑车、`1` = 静态巡线识别（不动电机）、`5` = TFT 预览、`6` = ASCII 预览，详见 `main.c` 头部注释。
 
 ## 摄像头验证现状（2026-08-28）
 
@@ -65,7 +65,7 @@ UVC 摄像头的配置描述符普遍超过默认的 256 字节，会报
 IDLE 任务饿死触发 task watchdog（每 5s 告警）、低优先级任务（如 app_main 的打印）被饿死。
 当前策略：
 
-- `FRAME_PROC_INTERVAL_MS=300`：采集侧限频 ~3fps（巡线足够；跑车嫌慢可降到 200）；
+- `FRAME_PROC_INTERVAL_MS=300`：采集侧目前限频约 3fps。该速度适合静态识别，但对行驶闭环偏慢；MODE=7 先用 8%～10% 低速验证，后续再根据解码负载尝试降到 200ms；
 - 解码任务 `img_proc` 固定在 **CPU1**，CPU0 留给 USB 主机和主任务；
 - 摄像头分辨率 > 320x240 时解码输出按 1/2 缩放（480x320 → 240x160），
   缩放档不支持时逐级回退；黑线检测的窗口/阈值按实际分辨率自适应。
@@ -95,9 +95,8 @@ IDLE 任务饿死触发 task watchdog（每 5s 告警）、低优先级任务（
 - 摄像头供电务必来自电池稳压 5V（同电机源），从电脑 USB 取电跑车会供电不稳。
 - 烧录时若 esptool 报 `No serial data received`：九成是没进下载模式（重做 BOOT+EN），
   其次检查 TX/RX 是否交叉、TTL 驱动是否装好（设备管理器里有没有 COM 口）。
-- `状态: 见线/丢线` 需要连续 3 帧一致才翻转（`camera_line_stable()`），
-  上层控制要等稳定标志，不要直接用单帧结果。
-- 调整摄像头俯角后，记得同步改 `CAM_SCAN_BOTTOM_PCT`（当前只扫画面最底部 25%）。
+- 启动电机前需要连续 3 帧稳定见线；但 MODE=7 启动后直接消费每张原始有效帧，避免约 3fps 下稳定门槛造成额外控制延迟。
+- 调整摄像头俯角后，记得检查 `CAM_SCAN_WIN_TOP_PCT` / `CAM_SCAN_WIN_HEIGHT_PCT`（当前只扫画面高度 30%～70%）。肉眼在整幅画面看见黑线，不代表算法窗口内也能看见。
 
 ## 目录速览
 
@@ -105,6 +104,7 @@ IDLE 任务饿死触发 task watchdog（每 5s 告警）、低优先级任务（
 main/
   camera_line.c/.h   UVC 采集(uvc_host 2.x) + JPEG 解码 + 黑线质心 + 稳定性判定
   ascii_preview.c/.h 串口 ASCII 字符画预览（模式 6，验证摄像头用）
+  camera_follow_test.c/.h 摄像头纯巡线低速测试（模式 7，无超声与状态机）
   walking.c/.h       行走控制（沿用任务一，误差源改为摄像头）
   ultrasonic.c/.h    HC-SR04 超声避障（沿用任务一）
   motor.c / encoder.c / tft_st7735.c   底层驱动（沿用任务一）

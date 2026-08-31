@@ -7,6 +7,7 @@
 #include "walking.h"
 #include "camera_line.h"
 #include "ascii_preview.h"
+#include "camera_follow_test.h"
 #include "encoder.h"
 #include "tft_st7735.h"
 #include "test.h"
@@ -28,8 +29,9 @@
  *   4 = TFT 面板自检   （仅屏幕，红绿蓝黑循环）
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
+ *   7 = 摄像头纯巡线实车测试（无超声/避障/找线旋转；丢线只停车）
  * ============================================================ */
-#define TASK2_MODE  0
+#define TASK2_MODE  7
 
 static const char *TAG = "task2";
 
@@ -291,6 +293,8 @@ void app_main(void)
     app_camera_preview();
 #elif TASK2_MODE == 6
     app_camera_ascii_preview();
+#elif TASK2_MODE == 7
+    app_camera_follow_test();
 #else
     app_integrated();
 #endif
