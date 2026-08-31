@@ -29,12 +29,12 @@
 /*
  * 扫描窗口（按摄像头安装几何标定）：
  * 摄像头俯角可调，调好后黑线位于画面垂直【中部】，
- * 因此只扫垂直中部窗口：上沿在画面高度 CAM_SCAN_WIN_TOP_PCT% 处、
- * 高 CAM_SCAN_WIN_HEIGHT_PCT%（默认画面 30%~70%）。
+ * 因此只扫垂直中下部窗口：上沿在画面高度 CAM_SCAN_WIN_TOP_PCT% 处、
+ * 高 CAM_SCAN_WIN_HEIGHT_PCT%（默认画面 35%~90%）。
  * 若再调整俯角导致线的位置移动，改这两个宏让窗口重新罩住线即可。
  */
-#define CAM_SCAN_WIN_TOP_PCT     30   /* 窗口上沿：画面高度 30% 处 */
-#define CAM_SCAN_WIN_HEIGHT_PCT  40   /* 窗口高度：画面高度的 40% */
+#define CAM_SCAN_WIN_TOP_PCT     35   /* 窗口上沿：画面高度 35% 处 */
+#define CAM_SCAN_WIN_HEIGHT_PCT  55   /* 窗口高度：画面高度的 55%，下沿 90% */
 
 /* 巡线结果快照 */
 typedef struct {

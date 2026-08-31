@@ -1,4 +1,5 @@
 #include "camera_line.h"
+#include <math.h>
 #include <string.h>
 #include <inttypes.h>
 #include "esp_log.h"
@@ -98,9 +99,10 @@ static esp_err_t usb_host_init(void)
  * UVC 帧回调（驱动任务上下文）：
  * 限频拷贝到 PSRAM 入队后立即归还缓冲，不做耗时处理。
  * 640x480 JPEG 解码约 200ms+/帧，全帧率解码会占满单核，
- * 因此采集侧限频到 ~3fps（巡线足够；调 FRAME_PROC_INTERVAL_MS 可改）。
+ * 因此采集侧限频。当前按 220ms 取最新帧，实际速度受 JPEG 解码耗时限制，
+ * 通常约 4fps；队列满时仍丢旧帧而不是积压过期画面。
  * ============================================================ */
-#define FRAME_PROC_INTERVAL_MS 300
+#define FRAME_PROC_INTERVAL_MS 220
 
 static bool uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
 {
@@ -242,62 +244,129 @@ static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void 
 }
 
 /* ============================================================
- * 黑线质心检测（RGB888）
+ * 黑线连续轨迹检测（RGB888）
  *
- * 策略：摄像头俯角可调，调好后黑线位于画面垂直【中部】。
- * 因此只扫描垂直中部窗口（上沿 CAM_SCAN_WIN_TOP_PCT%、
- * 高 CAM_SCAN_WIN_HEIGHT_PCT%）的行，画面上下边缘的
- * 背景/车体不参与判定，避免被误判为线。
+ * 旧算法把窗口内所有黑像素混在一起求质心。复杂赛道出现平行线、交叉线
+ * 或其它黑色标记时，质心会落在几条线之间，控制器会向不存在的“平均线”走。
+ *
+ * 新策略从靠近车体的窗口下沿向上逐行寻找连续黑色区段：
+ *   1. 第一行优先选最接近上一帧轨迹位置的区段；首次启动则选近中心者；
+ *   2. 后续行只跟随与上一行位置连续的区段，排除远处其它黑线；
+ *   3. 下方近车体的行权重更高，减少透视远端多线对转向的干扰；
+ *   4. 连续两帧无法匹配后解除旧轨迹锁，允许从新位置重新捕获。
  * ============================================================ */
+#define TRACK_MIN_RUN_PCT       2    /* 有效黑带最小宽度：画面宽度的 2% */
+#define TRACK_MAX_JUMP_PCT     35    /* 相邻行/帧允许的最大横向跳变 */
+#define TRACK_MIN_ROWS          4    /* 至少连续匹配这么多采样行 */
+
 static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_result_t *out)
 {
     const int y_start = h * CAM_SCAN_WIN_TOP_PCT / 100;     /* 窗口上沿 */
-    const int y_end   = y_start + h * CAM_SCAN_WIN_HEIGHT_PCT / 100;
-    const int row_step = 2;             /* 窗口小了，采样密一点 */
+    int y_end = y_start + h * CAM_SCAN_WIN_HEIGHT_PCT / 100;
+    if (y_end > h) y_end = h;
+    const int row_step = 2;
     /* 黑像素阈值按实际宽度缩放（阈值按 320 宽标定） */
     const uint32_t min_black = (uint32_t)LINE_MIN_BLACK_PIX * w / CAM_FRAME_WIDTH;
+    int min_run = w * TRACK_MIN_RUN_PCT / 100;
+    if (min_run < 3) min_run = 3;
+    const float max_jump = (float)w * TRACK_MAX_JUMP_PCT / 100.0f;
 
-    uint32_t black_sum_x = 0;
-    uint32_t black_count = 0;
-    uint16_t rows_with_line = 0;
+    /* 跨帧轨迹锚点：归一化保存，适配解码缩放变化。 */
+    static bool track_valid;
+    static float last_track_x_norm = 0.5f;
+    static uint8_t missed_frames;
+
+    float anchor_x = track_valid ? last_track_x_norm * (float)(w - 1)
+                                 : (float)(w - 1) / 2.0f;
+    bool row_anchor_valid = track_valid;
+    float weighted_sum_x = 0.0f;
+    uint32_t weight_sum = 0;
+    uint32_t selected_black = 0;
+    uint16_t selected_rows = 0;
     uint16_t wide_rows = 0;
     const uint32_t wide_row_min = (uint32_t)w * 65u / 100u;
 
-    for (int y = y_start; y < y_end; y += row_step) {
+    /* 由近到远扫描；相邻行所选黑带中心成为下一行的锚点。 */
+    for (int y = y_end - 1; y >= y_start; y -= row_step) {
         const uint8_t *row = rgb + (size_t)y * w * 3;
         uint32_t row_black = 0;
-        for (int x = 0; x < w; x++) {
-            /* RGB888 → 取亮度近似值 */
-            const uint8_t r = row[x * 3 + 0];
-            const uint8_t g = row[x * 3 + 1];
-            const uint8_t b = row[x * 3 + 2];
-            const uint8_t lum = (uint8_t)(((uint16_t)r + g + b) / 3);
-            if (lum < LINE_BLACK_Y_MAX) {
-                black_sum_x += x;
-                black_count++;
+        int run_start = -1;
+        int best_start = -1;
+        int best_end = -1;
+        float best_distance = 1.0e9f;
+
+        /* x==w 是哨兵，用于结算延伸到行末的黑色区段。 */
+        for (int x = 0; x <= w; x++) {
+            bool is_black = false;
+            if (x < w) {
+                const uint8_t r = row[x * 3 + 0];
+                const uint8_t g = row[x * 3 + 1];
+                const uint8_t b = row[x * 3 + 2];
+                const uint8_t lum = (uint8_t)(((uint16_t)r + g + b) / 3);
+                is_black = lum < LINE_BLACK_Y_MAX;
+            }
+
+            if (is_black) {
                 row_black++;
+                if (run_start < 0) run_start = x;
+            } else if (run_start >= 0) {
+                const int run_end = x - 1;
+                const int run_len = run_end - run_start + 1;
+                if (run_len >= min_run) {
+                    const float center = (float)(run_start + run_end) / 2.0f;
+                    const float distance = fabsf(center - anchor_x);
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_start = run_start;
+                        best_end = run_end;
+                    }
+                }
+                run_start = -1;
             }
         }
-        if (row_black >= min_black / 4) {
-            rows_with_line++;
-        }
+
         if (row_black >= wide_row_min) {
             wide_rows++;
         }
+
+        if (best_start < 0 || (row_anchor_valid && best_distance > max_jump)) {
+            continue;
+        }
+
+        const float center = (float)(best_start + best_end) / 2.0f;
+        /* 窗口下沿（近处）权重约 4，上沿（远处）权重约 1。 */
+        const uint32_t weight = 1u +
+            (uint32_t)((y - y_start) * 3 / (y_end - y_start > 0 ? y_end - y_start : 1));
+        weighted_sum_x += center * (float)weight;
+        weight_sum += weight;
+        selected_black += (uint32_t)(best_end - best_start + 1);
+        selected_rows++;
+        anchor_x = center;
+        row_anchor_valid = true;
     }
 
-    out->black_rows = rows_with_line;
+    out->black_rows = selected_rows;
     out->wide_black_rows = wide_rows;
-    if (black_count < min_black) {
+    if (selected_rows < TRACK_MIN_ROWS || selected_black < min_black || weight_sum == 0) {
         out->has_line = false;
         out->error = 0.0f;
+        if (missed_frames < 255) missed_frames++;
+        if (missed_frames >= 2) track_valid = false;
         return;
     }
 
-    /* 质心归一化到 [-1,+1]：0=画面中心，左负右正 */
-    const float cx = (float)black_sum_x / (float)black_count;
+    /* 所选连续轨迹的加权质心归一化到 [-1,+1]。 */
+    const float cx = weighted_sum_x / (float)weight_sum;
     out->error = (cx - (float)(w - 1) / 2.0f) / ((float)(w - 1) / 2.0f);
     out->has_line = true;
+    missed_frames = 0;
+    const float current_norm = cx / (float)(w - 1);
+    if (!track_valid) {
+        last_track_x_norm = current_norm;
+        track_valid = true;
+    } else {
+        last_track_x_norm += 0.55f * (current_norm - last_track_x_norm);
+    }
 }
 
 /* ============================================================
