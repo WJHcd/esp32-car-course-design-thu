@@ -38,6 +38,9 @@
 #define CAM_BIN_THRESHOLD                 120
 /* 见线最少黑色列数：窗口内判黑列少于此值视为丢线（"至少一路见线"的相机版） */
 #define CAM_LINE_MIN_COLUMNS               3
+/* 水平镜像：1 = 整帧左右翻转后再检测/显示。摄像头水平装反（实车转向
+ * 方向与预期相反）时置 1；翻转在解码后统一做，检测与两路预览自动一致 */
+#define CAM_FLIP_X                          1
 
 /*
  * 摄像头流参数（ESP32-S3 USB Full Speed 带宽限制）

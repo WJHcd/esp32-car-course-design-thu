@@ -395,6 +395,23 @@ static void processing_task(void *args)
             continue;
         }
 
+#if CAM_FLIP_X
+        /* 摄像头水平装反：整帧就地左右镜像。放在检测和回调之前，
+         * 巡线误差、ASCII 预览、TFT 预览看到的就是同一张校正后的图。 */
+        for (int y = 0; y < jpeg_out.height; y++) {
+            uint8_t *row = rgb_buf + (size_t)y * jpeg_out.width * 3;
+            for (int x = 0; x < jpeg_out.width / 2; x++) {
+                uint8_t *pa = row + (size_t)x * 3;
+                uint8_t *pb = row + (size_t)(jpeg_out.width - 1 - x) * 3;
+                for (int k = 0; k < 3; k++) {
+                    const uint8_t tmp = pa[k];
+                    pa[k] = pb[k];
+                    pb[k] = tmp;
+                }
+            }
+        }
+#endif
+
         /* 帧回调：把 RGB888 帧转发给外部（串口 ASCII 预览等） */
         if (s_frame_cb) {
             s_frame_cb(rgb_buf, jpeg_out.width, jpeg_out.height);
