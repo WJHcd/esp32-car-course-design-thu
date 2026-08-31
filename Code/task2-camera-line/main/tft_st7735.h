@@ -17,12 +17,14 @@ void tft_st7735_set_distance(uint16_t distance_cm);
 
 /**
  * 更新摄像头巡线状态（任务二）：屏幕第 5 行显示
- *   见线时：E:+0.12（误差，左负右正）
- *   丢线时：E:LOST
+ *   见线且稳定：E:+0.12 OK（误差，左负右正）
+ *   见线未稳定：E:+0.12 !（连续帧数/姿态稳定等待还没满足）
+ *   丢线时：    E:LOST
  * @param has_line  是否检测到黑线
  * @param error     黑线质心误差 [-1,+1]
+ * @param stable    状态是否稳定（camera_line_result_t::stable）
  */
-void tft_st7735_set_line(bool has_line, float error);
+void tft_st7735_set_line(bool has_line, float error, bool stable);
 
 /**
  * 将一帧 RGB888 图像显示到 TFT（摄像头画面预览用）。

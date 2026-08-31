@@ -92,8 +92,13 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_SIDE_FLIP_MIN          2  /* 累计票达到该值才允许翻转找线方向 */
 #define LINE_LOST_GRACE_MS        60u
 #define LINE_LOST_FORWARD_PCT      7
-#define LINE_SEARCH_TIMEOUT_MS     0u /* 0=只红外测试时持续找线，直到重新见线 */
+/* 找线超时（A1 修复）：原值 0 表示永不超时，丢线后原地找线会无限转圈。
+ * 超时进 FAILSAFE_STOP 刹车；车静止后摄像头容易满足稳定见线，可自动恢复。 */
+#define LINE_SEARCH_TIMEOUT_MS  3000u
 #define LINE_SEARCH_TURN_PCT       12
+/* 找线扫描换向周期（A3 修复）：每 1.2s 在"上次见线侧"与反方向之间交替，
+ * 避免方向猜错时一直朝错误方向空转。 */
+#define LINE_SEARCH_SWEEP_MS    1200u
 #define LINE_CORNER_SPEED_PCT      7
 #define LINE_CORNER_TURN_PCT      12
 /*
@@ -213,6 +218,11 @@ static uint8_t s_finish_samples;
 static uint32_t s_last_cam_frame_seq;
 static uint32_t s_avoid_find_line_start_seq;
 static bool s_cam_new_frame;
+/* 原始新帧（A2 修复）：不要求 stable，仅用于找线/弯道恢复计数。
+ * 旋转找线时凑不满"连续 3 帧一致"的稳定条件，若恢复也要求 stable
+ * 会永远找不回线（原地转圈自锁）。 */
+static bool s_cam_new_raw_frame;
+static uint32_t s_last_cam_raw_frame_seq;
 /* +1=黑线最后在右侧，应使用正 turn；-1=最后在左侧，应使用负 turn。 */
 static int s_last_line_side;
 /* 方向投票计数器：正=近期线在右侧占优，负=左侧占优。 */
@@ -432,8 +442,10 @@ void walking_reset(uint32_t now_ms)
     s_finish_armed = false;
     s_finish_samples = 0;
     s_last_cam_frame_seq = 0;
+    s_last_cam_raw_frame_seq = 0;
     s_avoid_find_line_start_seq = 0;
     s_cam_new_frame = false;
+    s_cam_new_raw_frame = false;
     s_cam = (camera_line_result_t){0};
     s_last_command = (walking_command_t){0};
     if (s_output_enabled) {
@@ -463,9 +475,15 @@ void walking_update_cam(const camera_line_result_t *cam,
         apply_brake();
         return;
     }
-    /* 主循环为 20ms、摄像头约为 3fps。只在新稳定帧到来时更新视觉量，
-     * 避免同一张旧图被重复当成多次“确认样本”。 */
-    s_cam_new_frame = cam->stable && cam->frame_seq != s_last_cam_frame_seq;
+    /* 主循环为 20ms、摄像头约为 3fps。区分两种"新帧"事件：
+     * 稳定新帧（要求 stable）→ 更新控制器视觉量 s_cam，供巡线/T线/侧别投票；
+     * 原始新帧（不要求 stable）→ 仅供找线/弯道恢复计数。
+     * 两者都按 frame_seq 去重，同一张旧图不会被重复消费。 */
+    s_cam_new_raw_frame = cam->frame_seq != s_last_cam_raw_frame_seq;
+    s_cam_new_frame = cam->stable && s_cam_new_raw_frame;
+    if (s_cam_new_raw_frame) {
+        s_last_cam_raw_frame_seq = cam->frame_seq;
+    }
     if (s_cam_new_frame) {
         s_cam = *cam;
         s_last_cam_frame_seq = cam->frame_seq;
@@ -500,8 +518,15 @@ void walking_update_cam(const camera_line_result_t *cam,
         break;
 
     case CAR_STATE_LINE_SEARCH: {
-        if (s_cam_new_frame && s_cam.has_line) {
+        /*
+         * 恢复判定用原始新帧（A2 修复）：连续 2 帧见线即恢复，不要求
+         * stable——旋转找线中凑不满稳定条件，按 stable 恢复会永远转圈。
+         * 恢复时用最新原始帧刷新 s_cam，否则 s_cam 仍停留在丢线旧数据，
+         * 回到 RUN 后会立刻再判丢线、弹回本状态。
+         */
+        if (s_cam_new_raw_frame && cam->has_line) {
             if (++s_line_reacquire_samples >= 2) {
+                s_cam = *cam;
                 s_last_error = 0.0f;
                 s_filtered_error = 0.0f;
                 s_error_filter_valid = false;
@@ -510,7 +535,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                 run_line_controller_cam(now_ms);
                 break;
             }
-        } else if (s_cam_new_frame) {
+        } else if (s_cam_new_raw_frame) {
             s_line_reacquire_samples = 0;
         }
 
@@ -522,12 +547,18 @@ void walking_update_cam(const camera_line_result_t *cam,
         }
 #endif
 
-        apply_body_command(0, s_last_line_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
+        /* 周期性换向扫描（A3 修复）：先朝上次见线侧转 1.2s，再反向
+         * 1.2s 交替，方向猜错时也能自行摆回来。 */
+        const int sweep_sign =
+            ((elapsed_ms(now_ms, s_state_enter_ms) / LINE_SEARCH_SWEEP_MS) & 1u) ? -1 : +1;
+        apply_body_command(0, s_last_line_side * sweep_sign * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
         break;
     }
 
     case CAR_STATE_CORNER_SEARCH: {
-        const bool has_line = s_cam.has_line;
+        /* 出口判定用最新原始帧（A2 修复）：旋转中 s_cam 只随稳定帧更新，
+         * 会长期停留在旧数据上；cam 为最近一帧结果，按帧到来时才计数。 */
+        const bool has_line = cam->has_line;
 
         if (!s_corner_retry_used &&
             elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_RETRY_MS) {
@@ -538,15 +569,16 @@ void walking_update_cam(const camera_line_result_t *cam,
 
         /* 出口判定：见线且误差方向与转弯方向一致（左转找负误差） */
         const bool exit_candidate =
-            has_line && ((s_corner_turn_side < 0) ? (s_cam.error < -CAM_ERR_BIG / 2)
-                                                  : (s_cam.error >  CAM_ERR_BIG / 2));
+            has_line && ((s_corner_turn_side < 0) ? (cam->error < -CAM_ERR_BIG / 2)
+                                                  : (cam->error >  CAM_ERR_BIG / 2));
 
         if (exit_candidate) {
-            if (s_cam_new_frame && s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
+            if (s_cam_new_raw_frame && s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
                 s_corner_exit_samples++;
             }
 
             if (s_corner_exit_samples >= LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
+                s_cam = *cam;   /* 用最新原始帧刷新视觉量，恢复后立即可控 */
                 s_last_error = 0.0f;
                 s_filtered_error = 0.0f;
                 s_error_filter_valid = false;
@@ -559,7 +591,7 @@ void walking_update_cam(const camera_line_result_t *cam,
 
             apply_body_command(0, 0, 0);
         } else {
-            if (s_cam_new_frame) {
+            if (s_cam_new_raw_frame) {
                 s_corner_exit_samples = 0;
             }
             apply_body_command(0,

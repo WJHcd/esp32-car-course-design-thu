@@ -75,6 +75,7 @@ static uint8_t s_distance_next_index;
 /* 摄像头巡线状态（任务二）：主循环写入，TFT 任务读取显示 */
 static volatile bool s_line_has;
 static volatile float s_line_error;
+static volatile bool s_line_stable;
 
 static void tft_write(bool is_data, const void *data, size_t length)
 {
@@ -248,9 +249,10 @@ static void tft_draw_telemetry(void)
     }
     tft_draw_text(8, 56, line, TFT_COLOR_YELLOW);
 
-    /* 第 5 行：摄像头巡线状态（任务二） */
+    /* 第 5 行：摄像头巡线状态（任务二），含稳定标志 */
     if (s_line_has) {
-        snprintf(line, sizeof(line), "E:%+.2f", (double)s_line_error);
+        snprintf(line, sizeof(line), "E:%+.2f %s",
+                 (double)s_line_error, s_line_stable ? "OK" : "!");
     } else {
         strcpy(line, "E:LOST");
     }
@@ -432,8 +434,9 @@ void tft_st7735_set_distance(uint16_t distance_cm)
     s_distance_cm = values[1];
 }
 
-void tft_st7735_set_line(bool has_line, float error)
+void tft_st7735_set_line(bool has_line, float error, bool stable)
 {
     s_line_has = has_line;
     s_line_error = error;
+    s_line_stable = stable;
 }

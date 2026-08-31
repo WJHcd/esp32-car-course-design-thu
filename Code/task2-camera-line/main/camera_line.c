@@ -244,14 +244,15 @@ static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void 
 /* ============================================================
  * 黑线质心检测（RGB888）
  *
- * 策略（2026-08-28 按实车安装几何修改）：
- * 摄像头装车顶、俯角小 → 黑线只出现在画面【最底部】（车前近处地面），
- * 画面上部是远处背景/桌面。因此只扫描最底部 CAM_SCAN_BOTTOM_PCT% 的行，
- * 避免远处暗色物体被误判为线。
+ * 策略：摄像头俯角可调，调好后黑线位于画面垂直【中部】。
+ * 因此只扫描垂直中部窗口（上沿 CAM_SCAN_WIN_TOP_PCT%、
+ * 高 CAM_SCAN_WIN_HEIGHT_PCT%）的行，画面上下边缘的
+ * 背景/车体不参与判定，避免被误判为线。
  * ============================================================ */
 static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_result_t *out)
 {
-    const int y_start = h - h * CAM_SCAN_BOTTOM_PCT / 100;  /* 只扫最底部 */
+    const int y_start = h * CAM_SCAN_WIN_TOP_PCT / 100;     /* 窗口上沿 */
+    const int y_end   = y_start + h * CAM_SCAN_WIN_HEIGHT_PCT / 100;
     const int row_step = 2;             /* 窗口小了，采样密一点 */
     /* 黑像素阈值按实际宽度缩放（阈值按 320 宽标定） */
     const uint32_t min_black = (uint32_t)LINE_MIN_BLACK_PIX * w / CAM_FRAME_WIDTH;
@@ -262,7 +263,7 @@ static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_r
     uint16_t wide_rows = 0;
     const uint32_t wide_row_min = (uint32_t)w * 65u / 100u;
 
-    for (int y = y_start; y < h; y += row_step) {
+    for (int y = y_start; y < y_end; y += row_step) {
         const uint8_t *row = rgb + (size_t)y * w * 3;
         uint32_t row_black = 0;
         for (int x = 0; x < w; x++) {

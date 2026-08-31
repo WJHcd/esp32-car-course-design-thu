@@ -29,7 +29,7 @@
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  * ============================================================ */
-#define TASK2_MODE  6
+#define TASK2_MODE  0
 
 static const char *TAG = "task2";
 
@@ -59,7 +59,7 @@ static void app_camera_line_test(void)
         camera_line_result_t res;
         camera_line_get(&res);
         /* 把巡线状态推给屏幕显示 */
-        tft_st7735_set_line(res.has_line, res.error);
+        tft_st7735_set_line(res.has_line, res.error, res.stable);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -154,8 +154,9 @@ static void app_camera_preview(void)
 }
 
 /*
- * 摄像头 ASCII 串口预览模式：不依赖 TFT，每秒把摄像头画面
- * 降采样成 64x24 字符画打印到串口监视器（80 列终端可完整显示）。
+ * 摄像头 ASCII 串口预览模式：不依赖电脑，每秒把摄像头画面
+ * 降采样成 64x24 字符画打印到串口监视器（80 列终端可完整显示），
+ * 同时把黑线状态同步显示到小车 TFT 屏幕（E 行）。
  *   '#' = 低于 LINE_BLACK_Y_MAX 判黑的像素（即算法看到的黑线）
  *   其他字符 = 亮度渐变（空格=全白，*=高亮）
  * 用于确认摄像头出帧/成像/黑线阈值是否合理。
@@ -169,8 +170,11 @@ static void app_camera_ascii_preview(void)
     printf("  '#' = 判为黑线的像素（阈值 LINE_BLACK_Y_MAX=%d）\n", LINE_BLACK_Y_MAX);
     printf("  其余字符按亮度渐变：空格=全白，*=高亮\n");
     printf("判读：无画面/全空 = 检查摄像头接线与供电；\n");
-    printf("      黑线应显示为一串 '#'；画面颠倒/镜像 = 调整摄像头安装。\n\n");
+    printf("      黑线应显示为一串 '#'；画面颠倒/镜像 = 调整摄像头安装。\n");
+    printf("小车屏幕 E 行同步显示：E:+0.12 OK=见线稳定，E:+0.12 !=见线未稳，E:LOST=丢线。\n\n");
 
+    tft_st7735_init();
+    tft_st7735_start_telemetry();
     if (!camera_line_init()) {
         ESP_LOGE(TAG, "摄像头初始化失败");
         return;
@@ -181,6 +185,7 @@ static void app_camera_ascii_preview(void)
     while (1) {
         camera_line_result_t res;
         camera_line_get(&res);
+        tft_st7735_set_line(res.has_line, res.error, res.stable);
         printf("状态: %s%s err=%+.2f rows=%u wide=%u frame=%lu\n",
                res.has_line ? "见线" : "丢线",
                res.stable ? "(稳)" : "(抖)",
@@ -213,7 +218,7 @@ void app_integrated(void)
     while (true) {
         camera_line_result_t cam;
         camera_line_get(&cam);
-        tft_st7735_set_line(cam.has_line, cam.error);
+        tft_st7735_set_line(cam.has_line, cam.error, cam.stable);
         if (camera_line_ready() && camera_line_stable() && cam.has_line) {
             const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             walking_reset(now_ms);
@@ -234,7 +239,7 @@ void app_integrated(void)
         /* 摄像头巡线：取最近一帧的黑线误差 */
         camera_line_result_t cam;
         camera_line_get(&cam);
-        tft_st7735_set_line(cam.has_line, cam.error);
+        tft_st7735_set_line(cam.has_line, cam.error, cam.stable);
 
         /* 每 5 拍（100ms）测一次超声 */
         uint16_t distance_sample = ULTRASONIC_INVALID;
