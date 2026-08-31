@@ -99,10 +99,11 @@ static esp_err_t usb_host_init(void)
  * UVC 帧回调（驱动任务上下文）：
  * 限频拷贝到 PSRAM 入队后立即归还缓冲，不做耗时处理。
  * 640x480 JPEG 解码约 200ms+/帧，全帧率解码会占满单核，
- * 因此采集侧限频。当前按 220ms 取最新帧，实际速度受 JPEG 解码耗时限制，
- * 通常约 4fps；队列满时仍丢旧帧而不是积压过期画面。
+ * 因此采集侧限频。当前按 150ms 取最新帧（实测解码 132ms/帧 @240MHz+-O2，
+ * 留 ~18ms 空闲喂 CPU1 看门狗），实际帧率约 6.7fps；解码仍是瓶颈。
+ * 队列满时仍丢旧帧而不是积压过期画面。
  * ============================================================ */
-#define FRAME_PROC_INTERVAL_MS 220
+#define FRAME_PROC_INTERVAL_MS 150
 
 static bool uvc_frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
 {

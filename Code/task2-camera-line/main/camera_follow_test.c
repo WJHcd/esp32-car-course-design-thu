@@ -22,7 +22,12 @@
 #define CAM_TEST_MAX_TURN_PCT      12
 #define CAM_TEST_STEERING_SIGN      (+1)
 #define CAM_TEST_CENTER_DEADBAND    0.06f
-#define CAM_TEST_FILTER_ALPHA       0.45f
+/* 滤波系数按帧率标定：EMA 时间常数 ≈ 帧间隔/α。帧率从 ~4fps 提到 ~7.4fps
+ * 后 α 相应减半，保持同样的平滑时间常数，避免帧间抖动直接进入转向。 */
+#define CAM_TEST_FILTER_ALPHA       0.22f
+/* 转向斜率限幅：相邻帧转向指令最大变化量。高帧率下无限制的转向可
+ * 以 ~8Hz 正反交替，超出机械惯性响应能力，实车表现为画龙/乱跑。 */
+#define CAM_TEST_TURN_SLEW_PCT      5
 #define CAM_TEST_FRAME_TIMEOUT_MS   900u
 
 static const char *TAG = "cam_follow_test";
@@ -66,6 +71,7 @@ void app_camera_follow_test(void)
     uint32_t last_frame_ms = now_ms();
     float filtered_error = cam.error;
     bool stopped_for_loss = false;
+    int last_turn = 0;
 
     ESP_LOGI(TAG, "稳定见线 frame=%lu err=%+.3f，开始低速巡线",
              (unsigned long)cam.frame_seq, cam.error);
@@ -82,6 +88,7 @@ void app_camera_follow_test(void)
             if (!cam.has_line) {
                 /* 测试版不猜方向、不找线：当前帧丢线就立刻停。 */
                 walking_test_drive(0, 0, 0);
+                last_turn = 0;   /* 重新起步时转向从 0 平滑爬升 */
                 if (!stopped_for_loss) {
                     ESP_LOGW(TAG,
                              "丢线，已停车等待：frame=%lu rows=%u stable=%d",
@@ -95,6 +102,11 @@ void app_camera_follow_test(void)
                 int turn = (int)lroundf(CAM_TEST_STEERING_SIGN *
                                         CAM_TEST_TURN_GAIN * control_error);
                 turn = clamp_int(turn, -CAM_TEST_MAX_TURN_PCT, CAM_TEST_MAX_TURN_PCT);
+                /* 斜率限幅：本帧转向相对上一帧最多变化 CAM_TEST_TURN_SLEW_PCT */
+                turn = clamp_int(turn,
+                                 last_turn - CAM_TEST_TURN_SLEW_PCT,
+                                 last_turn + CAM_TEST_TURN_SLEW_PCT);
+                last_turn = turn;
                 int forward = CAM_TEST_FORWARD_PCT - abs(turn) / 3;
                 forward = clamp_int(forward,
                                     CAM_TEST_MIN_FORWARD_PCT,
@@ -113,6 +125,7 @@ void app_camera_follow_test(void)
         } else if (current_ms - last_frame_ms >= CAM_TEST_FRAME_TIMEOUT_MS) {
             /* 摄像头卡住/掉线时不允许沿旧命令继续跑。 */
             walking_test_drive(0, 0, 0);
+            last_turn = 0;
             if (!stopped_for_loss) {
                 ESP_LOGE(TAG, "超过 %ums 没有新画面，已停车",
                          CAM_TEST_FRAME_TIMEOUT_MS);
