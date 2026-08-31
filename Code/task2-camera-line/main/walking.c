@@ -77,9 +77,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_B_GAIN       1.80f
 
 /* ------------------------ 控制参数区 ------------------------ */
-#define LINE_BASE_SPEED_PCT       15
-#define LINE_MIN_SPEED_PCT        10
-#define LINE_MAX_TURN_PCT         12
+#define LINE_BASE_SPEED_PCT       13
+#define LINE_MIN_SPEED_PCT         8
+#define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
 #define LINE_KD                    0.5f  /* 少量微分阻尼，抑制直线来回扭动 */
 #define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
@@ -91,22 +91,22 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_SIDE_ACCUM_WINDOW      4
 #define LINE_SIDE_FLIP_MIN          2  /* 累计票达到该值才允许翻转找线方向 */
 #define LINE_LOST_GRACE_MS        60u
-#define LINE_LOST_FORWARD_PCT     10
+#define LINE_LOST_FORWARD_PCT      7
 /* 找线超时（A1 修复）：原值 0 表示永不超时，丢线后原地找线会无限转圈。
  * 超时进 FAILSAFE_STOP 刹车；车静止后摄像头容易满足稳定见线，可自动恢复。 */
 #define LINE_SEARCH_TIMEOUT_MS  3000u
-#define LINE_SEARCH_TURN_PCT       15
+#define LINE_SEARCH_TURN_PCT       8
 /* 找线扫描换向周期（A3 修复）：每 1.2s 在"上次见线侧"与反方向之间交替，
  * 避免方向猜错时一直朝错误方向空转。 */
 #define LINE_SEARCH_SWEEP_MS    1200u
-#define LINE_CORNER_SPEED_PCT     10
-#define LINE_CORNER_TURN_PCT      15
+#define LINE_CORNER_SPEED_PCT      7
+#define LINE_CORNER_TURN_PCT      9
 /*
  * 锐角弯专用找出口参数：
  * - 结束条件始终是确认重新见线，不是定时结束；
  * - 重试时间只用于判断首选方向很可能错误，届时仅反向尝试一次。
  */
-#define LINE_CORNER_EXIT_CONFIRM_SAMPLES  3u
+#define LINE_CORNER_EXIT_CONFIRM_SAMPLES  2u
 #define LINE_CORNER_RETRY_MS           1000u
 /* 反向重试后仍找不到出口的总兜底时间：超时进故障停车，避免无限原地空转。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
