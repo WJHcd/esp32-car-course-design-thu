@@ -37,7 +37,7 @@ static const char *TAG = "task2";
 
 /*
  * 摄像头巡线测试模式：只初始化摄像头和屏幕显示，不驱动电机、不读超声。
- * 用于标定黑线阈值（LINE_BLACK_Y_MAX）和确认误差方向。
+ * 用于标定黑线阈值（CAM_BIN_THRESHOLD）和确认误差方向。
  * 信息显示在小车 TFT 屏幕上（无需电脑串口）：
  *   A/B/C 行：三路电机 RPM（未接编码器脉冲时为 0）
  *   D 行：超声距离（本模式未初始化超声，显示 ---）
@@ -159,7 +159,7 @@ static void app_camera_preview(void)
  * 摄像头 ASCII 串口预览模式：不依赖电脑，每秒把摄像头画面
  * 降采样成 64x24 字符画打印到串口监视器（80 列终端可完整显示），
  * 同时把黑线状态同步显示到小车 TFT 屏幕（E 行）。
- *   '#' = 低于 LINE_BLACK_Y_MAX 判黑的像素（即算法看到的黑线）
+ *   '#' = 低于 CAM_BIN_THRESHOLD 判黑的像素（即算法看到的黑线）
  *   其他字符 = 亮度渐变（空格=全白，*=高亮）
  * 用于确认摄像头出帧/成像/黑线阈值是否合理。
  */
@@ -169,7 +169,7 @@ static void app_camera_ascii_preview(void)
     printf("每 %d 秒打印一帧 %dx%d 字符画：\n",
            ASCII_PREVIEW_INTERVAL_MS / 1000,
            ASCII_PREVIEW_WIDTH, ASCII_PREVIEW_HEIGHT);
-    printf("  '#' = 判为黑线的像素（阈值 LINE_BLACK_Y_MAX=%d）\n", LINE_BLACK_Y_MAX);
+    printf("  '#' = 判为黑线的像素（阈值 CAM_BIN_THRESHOLD=%d）\n", CAM_BIN_THRESHOLD);
     printf("  其余字符按亮度渐变：空格=全白，*=高亮\n");
     printf("判读：无画面/全空 = 检查摄像头接线与供电；\n");
     printf("      黑线应显示为一串 '#'；画面颠倒/镜像 = 调整摄像头安装。\n");

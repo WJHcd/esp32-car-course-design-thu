@@ -15,34 +15,46 @@
  *   （walking.c 的 PD 控制器通过 LINE_KP 缩放适配该量纲）
  * ============================================================ */
 
-/* 摄像头流参数（ESP32-S3 USB Full Speed 带宽限制）
+/* ============================================================
+ * 扫描窗口与二值化标定区（2026-08-31 按红外等价位置标定）
+ * 现场调试只改下面 5 个宏，改完重新编译烧录。
+ *
+ * 设计对齐任务一红外巡线（LQ-R4CHV 四路，误差公式
+ * E = (-3a - b + c + 3d) / count，a/b/c/d 为左外→右外）：
+ *   - 扫描带中心 50% ≈ 红外阵列的安装高度（实测对齐）；
+ *   - 扫描宽度 40% ≈ 红外阵列的物理宽度（约 40% 画面宽）；
+ *   - 窗口内逐列视作虚拟探头，误差 = 命中列位置的归一化均值
+ *     （红外公式的连续推广），|error|=1 对应红外最外侧探头处。
+ * ============================================================ */
+
+/* 扫描位置：扫描带中心距画面【底部】的高度百分比（实测 50 ≈ 红外位置） */
+#define CAM_SCAN_CENTER_FROM_BOTTOM_PCT   50
+/* 扫描带高度：以扫描中心为基准的总高度百分比（模拟红外阵列的安装余量） */
+#define CAM_SCAN_BAND_HEIGHT_PCT           8
+/* 扫描宽度：画面宽度的百分比，水平居中（40 ≈ 红外阵列宽度） */
+#define CAM_SCAN_WIDTH_PCT                40
+/* 二值化阈值：rgb2gray 后灰度低于此值判黑（0~255，
+ * 对应 MATLAB imbinarize(I,T) 的全局阈值用法；光照变强适当调大） */
+#define CAM_BIN_THRESHOLD                 80
+/* 见线最少黑色列数：窗口内判黑列少于此值视为丢线（"至少一路见线"的相机版） */
+#define CAM_LINE_MIN_COLUMNS               3
+
+/*
+ * 摄像头流参数（ESP32-S3 USB Full Speed 带宽限制）
  * 首选 320x240；摄像头不支持时自动协商回退（640x480 等），
  * 检测与预览均按实际分辨率自适应 */
 #define CAM_FRAME_WIDTH    320
 #define CAM_FRAME_HEIGHT   240
 #define CAM_FRAME_FPS      30
 
-/* 黑线检测阈值标定（现场按光照调整） */
-#define LINE_BLACK_Y_MAX   80    /* Y 亮度低于此值判为黑色 */
-#define LINE_MIN_BLACK_PIX 30    /* 一行至少这么多黑像素才算有效线 */
-
-/*
- * 扫描窗口（按摄像头安装几何标定）：
- * 摄像头俯角可调，调好后黑线位于画面垂直【中部】，
- * 因此只扫垂直中下部窗口：上沿在画面高度 CAM_SCAN_WIN_TOP_PCT% 处、
- * 高 CAM_SCAN_WIN_HEIGHT_PCT%（默认画面 35%~90%）。
- * 若再调整俯角导致线的位置移动，改这两个宏让窗口重新罩住线即可。
- */
-#define CAM_SCAN_WIN_TOP_PCT     35   /* 窗口上沿：画面高度 35% 处 */
-#define CAM_SCAN_WIN_HEIGHT_PCT  55   /* 窗口高度：画面高度的 55%，下沿 90% */
-
 /* 巡线结果快照 */
 typedef struct {
     bool has_line;        /* 是否检测到黑线 */
     bool stable;          /* has_line 已连续多帧一致；见线还满足姿态稳定等待 */
-    float error;          /* 质心水平误差 [-1,+1]，左负右正，0=居中 */
-    uint16_t black_rows;  /* 检出黑线的行数（诊断用） */
-    uint16_t wide_black_rows; /* 黑色覆盖整行 >= 65% 的行数（T 线判定用） */
+    float error;          /* 质心水平误差 [-1,+1]，左负右正，0=扫描窗中心 */
+    uint16_t black_rows;  /* 扫描带内检出黑线的行数（诊断用） */
+    uint16_t wide_black_rows; /* 黑色覆盖窗口 >= 65% 的行数（T 线判定用） */
+    uint8_t line_pattern; /* 仿真红外 a/b/c/d 图案：bit3~bit0 = a(左外)~d(右外) */
     uint32_t frame_seq;   /* 每成功解码一帧递增一次，避免主循环重复消费旧帧 */
 } camera_line_result_t;
 

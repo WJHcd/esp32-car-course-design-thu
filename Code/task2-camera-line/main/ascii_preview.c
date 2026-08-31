@@ -24,6 +24,21 @@ void ascii_preview_on_frame(const uint8_t *rgb888, int width, int height)
     const int cell_w = width / ASCII_PREVIEW_WIDTH;
     const int cell_h = height / ASCII_PREVIEW_HEIGHT;
 
+    /* 扫描窗几何（与 detect_line_centroid 同一套宏），调参时直接对照字符画 */
+    {
+        const int win_w = width * CAM_SCAN_WIDTH_PCT / 100;
+        const int xs = (width - win_w) / 2;
+        const int xe = xs + win_w;
+        const int band_half = height * CAM_SCAN_BAND_HEIGHT_PCT / 200;
+        const int yc = height - height * CAM_SCAN_CENTER_FROM_BOTTOM_PCT / 100;
+        int yt = yc - band_half; if (yt < 0) yt = 0;
+        int yb = yc + band_half; if (yb > height) yb = height;
+        printf("扫描窗: 字符列%d-%d 字符行%d-%d (共%d列%d行) 阈值=%d\n",
+               xs / cell_w, (xe - 1) / cell_w,
+               yt / cell_h, (yb - 1) / cell_h,
+               ASCII_PREVIEW_WIDTH, ASCII_PREVIEW_HEIGHT, CAM_BIN_THRESHOLD);
+    }
+
     char *p = art_buf;
     for (int cy = 0; cy < ASCII_PREVIEW_HEIGHT; cy++) {
         for (int cx = 0; cx < ASCII_PREVIEW_WIDTH; cx++) {
@@ -38,11 +53,11 @@ void ascii_preview_on_frame(const uint8_t *rgb888, int width, int height)
                 }
             }
             const uint8_t lum = (uint8_t)(lum_sum / (uint32_t)(cell_w * cell_h * 3));
-            if (lum < LINE_BLACK_Y_MAX) {
+            if (lum < CAM_BIN_THRESHOLD) {
                 *p++ = '#';
             } else {
-                const int idx = (uint32_t)(lum - LINE_BLACK_Y_MAX)
-                                * (ART_LEVELS - 1) / (255 - LINE_BLACK_Y_MAX);
+                const int idx = (uint32_t)(lum - CAM_BIN_THRESHOLD)
+                                * (ART_LEVELS - 1) / (255 - CAM_BIN_THRESHOLD);
                 *p++ = ART_CHARS[idx];
             }
         }

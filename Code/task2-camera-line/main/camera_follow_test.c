@@ -115,11 +115,15 @@ void app_camera_follow_test(void)
                 walking_test_drive(forward, turn, 0);
                 stopped_for_loss = false;
                 ESP_LOGI(TAG,
-                         "frame=%lu %s raw=%+.3f filt=%+.3f rows=%u wide=%u -> F=%d T=%+d",
+                         "frame=%lu %s raw=%+.3f filt=%+.3f rows=%u wide=%u pat=%c%c%c%c -> F=%d T=%+d",
                          (unsigned long)cam.frame_seq,
                          cam.stable ? "稳" : "原始",
                          cam.error, filtered_error,
                          cam.black_rows, cam.wide_black_rows,
+                         (cam.line_pattern >> 3) & 1 ? '1' : '0',
+                         (cam.line_pattern >> 2) & 1 ? '1' : '0',
+                         (cam.line_pattern >> 1) & 1 ? '1' : '0',
+                         cam.line_pattern & 1 ? '1' : '0',
                          forward, turn);
             }
         } else if (current_ms - last_frame_ms >= CAM_TEST_FRAME_TIMEOUT_MS) {

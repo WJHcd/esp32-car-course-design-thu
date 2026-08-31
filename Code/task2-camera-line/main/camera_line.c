@@ -1,5 +1,4 @@
 #include "camera_line.h"
-#include <math.h>
 #include <string.h>
 #include <inttypes.h>
 #include "esp_log.h"
@@ -245,129 +244,101 @@ static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void 
 }
 
 /* ============================================================
- * 黑线连续轨迹检测（RGB888）
+ * 黑线检测 · 仿真红外阵列（RGB888 输入）
  *
- * 旧算法把窗口内所有黑像素混在一起求质心。复杂赛道出现平行线、交叉线
- * 或其它黑色标记时，质心会落在几条线之间，控制器会向不存在的“平均线”走。
+ * 沿用任务一红外巡线逻辑（infrared.c）：
+ *   红外：4 路探头 a/b/c/d（左外→右外），误差 = Σw·hit/count，
+ *         w = -3/-1/+1/+3 —— 等价于"命中探头位置的平均值"；
+ *         全白 = 丢线，全黑 = T 线/宽线。
  *
- * 新策略从靠近车体的窗口下沿向上逐行寻找连续黑色区段：
- *   1. 第一行优先选最接近上一帧轨迹位置的区段；首次启动则选近中心者；
- *   2. 后续行只跟随与上一行位置连续的区段，排除远处其它黑线；
- *   3. 下方近车体的行权重更高，减少透视远端多线对转向的干扰；
- *   4. 连续两帧无法匹配后解除旧轨迹锁，允许从新位置重新捕获。
+ * 相机版：在画面高度 CAM_SCAN_CENTER_FROM_BOTTOM_PCT%（自底向上）
+ * 处取一条 CAM_SCAN_BAND_HEIGHT_PCT% 高的水平扫描带（对应红外
+ * 阵列安装位置），窗口宽 CAM_SCAN_WIDTH_PCT%、水平居中（对应
+ * 阵列物理宽度）。带内像素先 rgb2gray（BT.601 权重）再按
+ * CAM_BIN_THRESHOLD 二值化（imbinarize 全局阈值用法），逐列统计：
+ * 过半采样行为黑的列视为"虚拟探头命中"。误差 = 命中列在窗口内
+ * 的归一化位置均值；a/b/c/d 四等分桶输出 line_pattern 供诊断，
+ * 窗口内黑色覆盖 >=65% 的行计入 wide_black_rows（T 线判定不变）。
  * ============================================================ */
-#define TRACK_MIN_RUN_PCT       2    /* 有效黑带最小宽度：画面宽度的 2% */
-#define TRACK_MAX_JUMP_PCT     35    /* 相邻行/帧允许的最大横向跳变 */
-#define TRACK_MIN_ROWS          4    /* 至少连续匹配这么多采样行 */
+#define CAM_SCAN_MAX_WINDOW  (CAM_MAX_WIDTH * CAM_SCAN_WIDTH_PCT / 100 + 1)
+
+static uint16_t s_col_black[CAM_SCAN_MAX_WINDOW];   /* 带内每列判黑行数 */
 
 static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_result_t *out)
 {
-    const int y_start = h * CAM_SCAN_WIN_TOP_PCT / 100;     /* 窗口上沿 */
-    int y_end = y_start + h * CAM_SCAN_WIN_HEIGHT_PCT / 100;
-    if (y_end > h) y_end = h;
-    const int row_step = 2;
-    /* 黑像素阈值按实际宽度缩放（阈值按 320 宽标定） */
-    const uint32_t min_black = (uint32_t)LINE_MIN_BLACK_PIX * w / CAM_FRAME_WIDTH;
-    int min_run = w * TRACK_MIN_RUN_PCT / 100;
-    if (min_run < 3) min_run = 3;
-    const float max_jump = (float)w * TRACK_MAX_JUMP_PCT / 100.0f;
+    /* ---- 窗口几何：水平居中，垂直为扫描带 ---- */
+    int win_w = w * CAM_SCAN_WIDTH_PCT / 100;
+    if (win_w > w) win_w = w;
+    if (win_w < 1) win_w = 1;
+    int x_start = (w - win_w) / 2;
+    const int x_end = x_start + win_w;
+    const int band_half = h * CAM_SCAN_BAND_HEIGHT_PCT / 200;
+    const int y_center = h - h * CAM_SCAN_CENTER_FROM_BOTTOM_PCT / 100; /* 自底向上量 */
+    int y_top = y_center - band_half;
+    int y_bottom = y_center + band_half;
+    if (y_top < 0) y_top = 0;
+    if (y_bottom > h) y_bottom = h;
 
-    /* 跨帧轨迹锚点：归一化保存，适配解码缩放变化。 */
-    static bool track_valid;
-    static float last_track_x_norm = 0.5f;
-    static uint8_t missed_frames;
+    const int sampled_rows = y_bottom - y_top;
+    memset(s_col_black, 0, sizeof(s_col_black[0]) * (size_t)win_w);
 
-    float anchor_x = track_valid ? last_track_x_norm * (float)(w - 1)
-                                 : (float)(w - 1) / 2.0f;
-    bool row_anchor_valid = track_valid;
-    float weighted_sum_x = 0.0f;
-    uint32_t weight_sum = 0;
-    uint32_t selected_black = 0;
-    uint16_t selected_rows = 0;
+    uint16_t rows_with_line = 0;
     uint16_t wide_rows = 0;
-    const uint32_t wide_row_min = (uint32_t)w * 65u / 100u;
 
-    /* 由近到远扫描；相邻行所选黑带中心成为下一行的锚点。 */
-    for (int y = y_end - 1; y >= y_start; y -= row_step) {
+    /* ---- 扫描带内逐像素 rgb2gray + 二值化，按列/行累计 ---- */
+    for (int y = y_top; y < y_bottom; y++) {
         const uint8_t *row = rgb + (size_t)y * w * 3;
         uint32_t row_black = 0;
-        int run_start = -1;
-        int best_start = -1;
-        int best_end = -1;
-        float best_distance = 1.0e9f;
-
-        /* x==w 是哨兵，用于结算延伸到行末的黑色区段。 */
-        for (int x = 0; x <= w; x++) {
-            bool is_black = false;
-            if (x < w) {
-                const uint8_t r = row[x * 3 + 0];
-                const uint8_t g = row[x * 3 + 1];
-                const uint8_t b = row[x * 3 + 2];
-                const uint8_t lum = (uint8_t)(((uint16_t)r + g + b) / 3);
-                is_black = lum < LINE_BLACK_Y_MAX;
-            }
-
-            if (is_black) {
+        for (int x = x_start; x < x_end; x++) {
+            const uint8_t r = row[x * 3 + 0];
+            const uint8_t g = row[x * 3 + 1];
+            const uint8_t b = row[x * 3 + 2];
+            /* rgb2gray（BT.601：0.299R+0.587G+0.114B，定点 77/150/29 /256） */
+            const uint16_t gray = (uint16_t)((r * 77 + g * 150 + b * 29) >> 8);
+            if (gray < CAM_BIN_THRESHOLD) {
+                s_col_black[x - x_start]++;
                 row_black++;
-                if (run_start < 0) run_start = x;
-            } else if (run_start >= 0) {
-                const int run_end = x - 1;
-                const int run_len = run_end - run_start + 1;
-                if (run_len >= min_run) {
-                    const float center = (float)(run_start + run_end) / 2.0f;
-                    const float distance = fabsf(center - anchor_x);
-                    if (distance < best_distance) {
-                        best_distance = distance;
-                        best_start = run_start;
-                        best_end = run_end;
-                    }
-                }
-                run_start = -1;
             }
         }
-
-        if (row_black >= wide_row_min) {
+        if (row_black >= CAM_LINE_MIN_COLUMNS) {
+            rows_with_line++;
+        }
+        if ((uint32_t)row_black * 100u >= (uint32_t)win_w * 65u) {
             wide_rows++;
         }
-
-        if (best_start < 0 || (row_anchor_valid && best_distance > max_jump)) {
-            continue;
-        }
-
-        const float center = (float)(best_start + best_end) / 2.0f;
-        /* 窗口下沿（近处）权重约 4，上沿（远处）权重约 1。 */
-        const uint32_t weight = 1u +
-            (uint32_t)((y - y_start) * 3 / (y_end - y_start > 0 ? y_end - y_start : 1));
-        weighted_sum_x += center * (float)weight;
-        weight_sum += weight;
-        selected_black += (uint32_t)(best_end - best_start + 1);
-        selected_rows++;
-        anchor_x = center;
-        row_anchor_valid = true;
     }
 
-    out->black_rows = selected_rows;
+    /* ---- 逐列判定虚拟探头命中（过半采样行为黑），求误差与 a/b/c/d ---- */
+    const float half_win = (float)(win_w - 1) / 2.0f;
+    float sum_norm = 0.0f;
+    int hit_cols = 0;
+    uint8_t pattern = 0;
+    for (int i = 0; i < win_w; i++) {
+        if (s_col_black[i] * 2 < sampled_rows) {
+            continue;
+        }
+        hit_cols++;
+        sum_norm += ((float)i - half_win) / half_win;
+        /* 四等分桶：slot0=最左=a … slot3=最右=d（对应红外位权 -3/-1/+1/+3） */
+        int slot = i * 4 / win_w;
+        if (slot > 3) slot = 3;
+        pattern |= (uint8_t)(1u << (3 - slot));
+    }
+
+    out->black_rows = rows_with_line;
     out->wide_black_rows = wide_rows;
-    if (selected_rows < TRACK_MIN_ROWS || selected_black < min_black || weight_sum == 0) {
+    out->line_pattern = pattern;
+
+    if (hit_cols < CAM_LINE_MIN_COLUMNS || sampled_rows <= 0) {
+        /* 等价红外全白：丢线 */
         out->has_line = false;
         out->error = 0.0f;
-        if (missed_frames < 255) missed_frames++;
-        if (missed_frames >= 2) track_valid = false;
         return;
     }
 
-    /* 所选连续轨迹的加权质心归一化到 [-1,+1]。 */
-    const float cx = weighted_sum_x / (float)weight_sum;
-    out->error = (cx - (float)(w - 1) / 2.0f) / ((float)(w - 1) / 2.0f);
+    /* 命中列归一化位置均值 ∈ [-1,+1]，0=窗口中心（与画面中心重合） */
+    out->error = sum_norm / (float)hit_cols;
     out->has_line = true;
-    missed_frames = 0;
-    const float current_norm = cx / (float)(w - 1);
-    if (!track_valid) {
-        last_track_x_norm = current_norm;
-        track_valid = true;
-    } else {
-        last_track_x_norm += 0.55f * (current_norm - last_track_x_norm);
-    }
 }
 
 /* ============================================================
@@ -480,10 +451,14 @@ static void processing_task(void *args)
         if (esp_timer_get_time() - last_log > 500000) {  /* 500ms 打印一次 */
             last_log = esp_timer_get_time();
             if (s_stats_log_enabled) {
-                ESP_LOGI(TAG, "帧%" PRIu32 ": %s%s err=%+.2f rows=%u wide=%u",
-                         frames, s_result.has_line ? "见线" : "丢线",
-                         s_result.stable ? "(稳)" : "(抖)",
-                         s_result.error, s_result.black_rows, s_result.wide_black_rows);
+            ESP_LOGI(TAG, "帧%" PRIu32 ": %s%s err=%+.2f rows=%u wide=%u pat=%c%c%c%c",
+                     frames, s_result.has_line ? "见线" : "丢线",
+                     s_result.stable ? "(稳)" : "(抖)",
+                     s_result.error, s_result.black_rows, s_result.wide_black_rows,
+                     (s_result.line_pattern >> 3) & 1 ? '1' : '0',
+                     (s_result.line_pattern >> 2) & 1 ? '1' : '0',
+                     (s_result.line_pattern >> 1) & 1 ? '1' : '0',
+                     s_result.line_pattern & 1 ? '1' : '0');
             }
         }
     }
