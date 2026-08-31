@@ -8,27 +8,31 @@ rem ============================================================
 set PORT=%~1
 if "%PORT%"=="" set PORT=COM8
 
-set IDF_PATH=C:\esp\v5.4.4\esp-idf
-set IDF_TOOLS_PATH=C:\Espressif\tools
-set IDF_PYTHON_ENV_PATH=C:\Espressif\tools\python\v5.4.4\venv
-set IDF_PYTHON_CHECK_CONSTRAINTS=0
-set MSYSTEM=
+set IDF_PYTHON=C:\Espressif\tools\python\v5.4.4\venv\Scripts\python.exe
 
-set PATH=C:\Espressif\tools\cmake\3.30.2\bin;^
-C:\Espressif\tools\ninja\1.12.1;^
-C:\Espressif\tools\xtensa-esp-elf\esp-14.2.0_20260121\xtensa-esp-elf\bin;^
-C:\Espressif\tools\riscv32-esp-elf\esp-14.2.0_20260121\riscv32-esp-elf\bin;^
-C:\Espressif\tools\python\v5.4.4\venv\Scripts;%PATH%
-
-cd /d %~dp0
+if not exist "%~dp0build\flash_args" goto :nobuild
+if not exist "%IDF_PYTHON%" goto :nopython
 
 echo ====== flashing to %PORT% ======
-python "%IDF_PATH%\tools\idf.py" -p %PORT% flash
-if errorlevel 1 goto :err
+pushd "%~dp0build"
+"%IDF_PYTHON%" -m esptool --chip esp32s3 -p %PORT% -b 460800 --before no_reset --after hard_reset write_flash @flash_args
+set FLASH_RC=%ERRORLEVEL%
+popd
+if not "%FLASH_RC%"=="0" goto :err
 
 echo.
 echo ************ Flash OK ************
 goto :eof
+
+:nobuild
+echo.
+echo ************ Flash FAILED: build\flash_args not found; run build-fast.bat first ************
+exit /b 1
+
+:nopython
+echo.
+echo ************ Flash FAILED: ESP-IDF Python not found at %IDF_PYTHON% ************
+exit /b 1
 
 :err
 echo.
