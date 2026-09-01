@@ -145,21 +145,23 @@ void motor_set_dir(int id, motor_dir_t dir)
     ESP_ERROR_CHECK(gpio_set_level(s_dir_pins[id][1], in2));
 }
 
-void motor_set_speed(int id, int percent)
+void motor_set_speed(int id, float percent)
 {
     if (id < 0 || id >= MOTOR_NUM) return;
-    if (percent > 100)  percent = 100;
-    if (percent < -100) percent = -100;
+    if (percent > 100.0f)  percent = 100.0f;
+    if (percent < -100.0f) percent = -100.0f;
 
-    if (percent == 0) {
+    if (percent == 0.0f) {
         set_pwm_duty(id, 0);
         motor_set_dir(id, MOTOR_DIR_COAST);
         s_last_motion_dir[id] = MOTOR_DIR_COAST;
         return;
     }
 
-    motor_dir_t dir = (percent > 0) ? MOTOR_DIR_FORWARD : MOTOR_DIR_BACKWARD;
-    uint32_t duty = (uint32_t)((percent < 0 ? -percent : percent) * MOTOR_PWM_MAX / 100);
+    motor_dir_t dir = (percent > 0.0f) ? MOTOR_DIR_FORWARD : MOTOR_DIR_BACKWARD;
+    /* 四舍五入到 duty 计数：10bit 下 1% ≈ 10.2 计数，0.5% 微调可分辨 */
+    const float magnitude = (percent < 0.0f) ? -percent : percent;
+    uint32_t duty = (uint32_t)(magnitude * MOTOR_PWM_MAX / 100.0f + 0.5f);
 
     /* 带载直接换向会产生很大的冲击电流；先清 PWM，滑行 200us 再换向。 */
     if ((s_last_motion_dir[id] == MOTOR_DIR_FORWARD ||

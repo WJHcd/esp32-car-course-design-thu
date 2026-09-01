@@ -77,7 +77,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_B_GAIN       1.80f
 
 /* ------------------------ 控制参数区 ------------------------ */
-#define LINE_BASE_SPEED_PCT       13
+/* 直线基准速度（2026-09-01 现场 14→13.5）；弯道前进按 13.5-|turn|/2 联动 */
+#define LINE_BASE_SPEED_PCT       13.5f
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -94,21 +95,36 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_LOST_FORWARD_PCT      7
 /* 找线超时（A1 修复）：原值 0 表示永不超时，丢线后原地找线会无限转圈。
  * 超时进 FAILSAFE_STOP 刹车；车静止后摄像头容易满足稳定见线，可自动恢复。 */
-#define LINE_SEARCH_TIMEOUT_MS  3000u
-#define LINE_SEARCH_TURN_PCT       8
-/* 找线扫描换向周期（A3 修复）：每 1.2s 在"上次见线侧"与反方向之间交替，
- * 避免方向猜错时一直朝错误方向空转。 */
-#define LINE_SEARCH_SWEEP_MS    1200u
-#define LINE_CORNER_SPEED_PCT      7
+/* 5000ms：换向周期 1.6s 下两相位（先猜错再扫回）也能覆盖锐角出口
+ * 所需的 ~120° 单侧摆幅，另留静止确认的余量。 */
+#define LINE_SEARCH_TIMEOUT_MS  5000u
+/* 找线转速（2026-09-01 8%→10%）：找线改为首帧见线即停车、静止确认，
+ * 不再依赖低速让线在带内停留 2 帧；提速直接缩短锐角 ~120° 的找线时间。 */
+#define LINE_SEARCH_TURN_PCT      10
+/* 找线扫描换向周期（A3 修复）：在"上次见线侧"与反方向之间交替，
+ * 避免方向猜错时一直朝错误方向空转。
+ * 1600ms：10% 转速下单相位约覆盖 130°+，锐角出口（相对丢线航向
+ * ~120°）在首个相位内即可扫到；旧值 1200ms 只够直角弯。 */
+#define LINE_SEARCH_SWEEP_MS    1600u
+/* 弯道前进速度（2026-09-01 现场 7→6.5） */
+#define LINE_CORNER_SPEED_PCT    6.5f
 #define LINE_CORNER_TURN_PCT      9
 /*
- * 锐角弯专用找出口参数：
- * - 结束条件始终是确认重新见线，不是定时结束；
- * - 重试时间只用于判断首选方向很可能错误，届时仅反向尝试一次。
+ * 锐角弯专用找出口参数（2026-09-01 重构）：
+ * - 取消 1000ms 定时反向：找线转速下 1s 转不满锐角出口所需的 ~120°，
+ *   到点反向只会把已转过的角度退回去，方向猜对反而必败。改为按锁定
+ *   方向单向持续旋转——方向即使猜错，出口线绕一圈（~240°）后仍会从
+ *   锁定侧进入扫描带，5s 兜底足够覆盖；
+ * - 结束条件始终是"重新见线并静止确认"，不是定时结束。
  */
 #define LINE_CORNER_EXIT_CONFIRM_SAMPLES  2u
-#define LINE_CORNER_RETRY_MS           1000u
-/* 反向重试后仍找不到出口的总兜底时间：超时进故障停车，避免无限原地空转。 */
+/* 出口误差下限（现场标定 0.50→0.30）：已贴近顶点宽黑区质心常驻的
+ * 中央区域（|err|<0.3），此档位基本是"同侧见线即接受"。若车在顶点
+ * 反复凑近/折返，往 0.5~0.7 回调；若出口接不住的现象仍在，问题可能
+ * 不在此参数（查方向锁定侧别或摄像头帧时机）。 */
+#define LINE_CORNER_EXIT_MIN_ERR     0.30f
+/* 总兜底时间：超时进故障停车，避免无限原地空转。FAILSAFE 的自动恢复
+ * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
 #define OBSTACLE_TRIGGER_CM       15u
@@ -207,7 +223,6 @@ static uint8_t s_line_reacquire_samples;
 static uint8_t s_corner_exit_samples;
 static bool s_line_lost_timing;
 static bool s_last_line_was_corner;
-static bool s_corner_retry_used;
 static bool s_output_enabled;
 static float s_last_error;
 /* ---- 终点 T 线停车（2026-08-27 新增）----
@@ -239,6 +254,13 @@ static int clamp_int(int value, int low, int high)
     return value;
 }
 
+static float clamp_float(float value, float low, float high)
+{
+    if (value < low) return low;
+    if (value > high) return high;
+    return value;
+}
+
 static uint32_t elapsed_ms(uint32_t now_ms, uint32_t since_ms)
 {
     return now_ms - since_ms;  /* unsigned subtraction also handles wraparound */
@@ -259,17 +281,18 @@ static void enter_state(car_state_t state, uint32_t now_ms)
  * 循迹只用到 forward/turn（strafe=0），输出与旧版完全一致，不影响循迹。
  * 三轮比例超出 100% 时等比缩放，避免逐轮截断改变运动方向。
  */
-static void apply_body_command(int forward, int turn, int strafe)
+static void apply_body_command(float forward, float turn, float strafe)
 {
-    s_last_command.forward_percent = forward;
-    s_last_command.turn_percent = turn;
-    s_last_command.strafe_percent = strafe;
+    /* 遥测结构体仍是整数：四舍五入显示，PWM 按 float 落地 */
+    s_last_command.forward_percent = (int)lroundf(forward);
+    s_last_command.turn_percent = (int)lroundf(turn);
+    s_last_command.strafe_percent = (int)lroundf(strafe);
 
     float wheel[MOTOR_NUM] = {0};
-    wheel[WHEEL_TO_MOTOR_L] = (float)(FORWARD_SIGN_L * forward + TURN_SIGN_L * turn + STRAFE_SIGN_L * strafe);
-    wheel[WHEEL_TO_MOTOR_R] = (float)(FORWARD_SIGN_R * forward + TURN_SIGN_R * turn + STRAFE_SIGN_R * strafe);
-    wheel[WHEEL_TO_MOTOR_B] = (float)(TURN_SIGN_B * turn) * TURN_B_GAIN
-                            + (float)(STRAFE_SIGN_B * strafe) * STRAFE_B_GAIN;
+    wheel[WHEEL_TO_MOTOR_L] = FORWARD_SIGN_L * forward + TURN_SIGN_L * turn + STRAFE_SIGN_L * strafe;
+    wheel[WHEEL_TO_MOTOR_R] = FORWARD_SIGN_R * forward + TURN_SIGN_R * turn + STRAFE_SIGN_R * strafe;
+    wheel[WHEEL_TO_MOTOR_B] = TURN_SIGN_B * turn * TURN_B_GAIN
+                            + STRAFE_SIGN_B * strafe * STRAFE_B_GAIN;
 
     float max_abs = 100.0f;
     for (int i = 0; i < MOTOR_NUM; i++) {
@@ -284,7 +307,7 @@ static void apply_body_command(int forward, int turn, int strafe)
     }
 
     for (int i = 0; i < MOTOR_NUM; i++) {
-        const int percent = (int)lroundf(wheel[i] * s_motor_gain[i] * 100.0f / max_abs);
+        const float percent = wheel[i] * s_motor_gain[i] * 100.0f / max_abs;
         motor_set_speed(i, percent * s_motor_sign[i]);
     }
 }
@@ -432,7 +455,6 @@ void walking_reset(uint32_t now_ms)
     s_corner_exit_samples = 0;
     s_line_lost_timing = false;
     s_last_line_was_corner = false;
-    s_corner_retry_used = false;
     s_last_error = 0.0f;
     s_last_line_side = +1;
     s_line_side_accum = 0;
@@ -523,20 +545,28 @@ void walking_update_cam(const camera_line_result_t *cam,
          * stable——旋转找线中凑不满稳定条件，按 stable 恢复会永远转圈。
          * 恢复时用最新原始帧刷新 s_cam，否则 s_cam 仍停留在丢线旧数据，
          * 回到 RUN 后会立刻再判丢线、弹回本状态。
+         *
+         * 首帧见线立即停车（2026-09-01）：旧逻辑边转边数 2 帧，转速稍快
+         * 线就滑出扫描带、计数清零，表现为"明明扫到还继续原地转"。现在
+         * 首帧见线即静止，画面不动，下一帧确认几乎必然命中；确认失败
+         * （单帧误检）则清零继续扫描。
          */
-        if (s_cam_new_raw_frame && cam->has_line) {
-            if (++s_line_reacquire_samples >= 2) {
-                s_cam = *cam;
-                s_last_error = 0.0f;
-                s_filtered_error = 0.0f;
-                s_error_filter_valid = false;
-                s_line_lost_timing = false;
-                enter_state(CAR_STATE_RUN, now_ms);
-                run_line_controller_cam(now_ms);
-                break;
+        if (s_cam_new_raw_frame) {
+            if (cam->has_line) {
+                if (++s_line_reacquire_samples >= 2) {
+                    s_cam = *cam;
+                    s_last_error = 0.0f;
+                    s_filtered_error = 0.0f;
+                    s_error_filter_valid = false;
+                    s_line_lost_timing = false;
+                    enter_state(CAR_STATE_RUN, now_ms);
+                    run_line_controller_cam(now_ms);
+                    break;
+                }
+                /* 首帧见线：落到下方静止等待确认帧，不再继续转 */
+            } else {
+                s_line_reacquire_samples = 0;
             }
-        } else if (s_cam_new_raw_frame) {
-            s_line_reacquire_samples = 0;
         }
 
 #if LINE_SEARCH_TIMEOUT_MS > 0u
@@ -547,11 +577,15 @@ void walking_update_cam(const camera_line_result_t *cam,
         }
 #endif
 
-        /* 周期性换向扫描（A3 修复）：先朝上次见线侧转 1.2s，再反向
-         * 1.2s 交替，方向猜错时也能自行摆回来。 */
-        const int sweep_sign =
-            ((elapsed_ms(now_ms, s_state_enter_ms) / LINE_SEARCH_SWEEP_MS) & 1u) ? -1 : +1;
-        apply_body_command(0, s_last_line_side * sweep_sign * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
+        if (s_line_reacquire_samples > 0u) {
+            apply_body_command(0, 0, 0);   /* 见线后静止，等下一帧确认 */
+        } else {
+            /* 周期性换向扫描（A3 修复）：先朝上次见线侧转，再反向交替，
+             * 方向猜错时也能自行摆回来。 */
+            const int sweep_sign =
+                ((elapsed_ms(now_ms, s_state_enter_ms) / LINE_SEARCH_SWEEP_MS) & 1u) ? -1 : +1;
+            apply_body_command(0, s_last_line_side * sweep_sign * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
+        }
         break;
     }
 
@@ -560,17 +594,19 @@ void walking_update_cam(const camera_line_result_t *cam,
          * 会长期停留在旧数据上；cam 为最近一帧结果，按帧到来时才计数。 */
         const bool has_line = cam->has_line;
 
-        if (!s_corner_retry_used &&
-            elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_RETRY_MS) {
-            s_corner_turn_side = -s_corner_turn_side;
-            s_corner_retry_used = true;
-            s_corner_exit_samples = 0;
-        }
-
-        /* 出口判定：见线且误差方向与转弯方向一致（左转找负误差） */
+        /*
+         * 出口判定（2026-09-01 重构）：见线且线出现在当前转向一侧、幅值
+         * 达到现场标定阈值 LINE_CORNER_EXIT_MIN_ERR（含义见参数区说明）。
+         * 原条件还要求同侧且 |err|>0.225，而旋转中出口线从扫描带边缘
+         * 切入（误差接近满偏），顶点宽黑区质心又常停在中央附近。方向
+         * 同侧门控同时天然排除入口旧线段：车头朝锁定侧旋转时，它只会
+         * 向转向反侧滑出视野。
+         * 不再定时反向：单向持续旋转下方向猜错也能扫到出口（见参数区
+         * 说明），到点反向反而会退掉已转过的角度。
+         */
         const bool exit_candidate =
-            has_line && ((s_corner_turn_side < 0) ? (cam->error < -CAM_ERR_BIG / 2)
-                                                  : (cam->error >  CAM_ERR_BIG / 2));
+            has_line && ((s_corner_turn_side < 0) ? (cam->error < -LINE_CORNER_EXIT_MIN_ERR)
+                                                  : (cam->error >  LINE_CORNER_EXIT_MIN_ERR));
 
         if (exit_candidate) {
             if (s_cam_new_raw_frame && s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
@@ -589,11 +625,12 @@ void walking_update_cam(const camera_line_result_t *cam,
                 break;
             }
 
-            apply_body_command(0, 0, 0);
+            apply_body_command(0, 0, 0);   /* 候选帧立即停车，静止画面下确认最可靠 */
         } else {
             if (s_cam_new_raw_frame) {
                 s_corner_exit_samples = 0;
             }
+            /* 按锁定方向持续慢转，直到见线确认或总超时 */
             apply_body_command(0,
                                s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
         }
@@ -739,7 +776,6 @@ static void run_line_controller_cam(uint32_t now_ms)
         if (s_last_line_was_corner) {
             s_corner_turn_side = s_last_line_side;
             s_corner_exit_samples = 0;
-            s_corner_retry_used = false;
             enter_state(CAR_STATE_CORNER_SEARCH, now_ms);
             apply_body_command(0,
                                s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
@@ -798,7 +834,7 @@ static void run_line_controller_cam(uint32_t now_ms)
     turn = clamp_int(turn, -LINE_MAX_TURN_PCT, LINE_MAX_TURN_PCT);
     turn = limit_line_turn_slew(turn);
 
-    int forward = LINE_BASE_SPEED_PCT - abs(turn) / 2;
-    forward = clamp_int(forward, LINE_MIN_SPEED_PCT, LINE_BASE_SPEED_PCT);
+    const float forward = clamp_float(LINE_BASE_SPEED_PCT - abs(turn) / 2.0f,
+                                      LINE_MIN_SPEED_PCT, LINE_BASE_SPEED_PCT);
     apply_body_command(forward, turn, 0);
 }

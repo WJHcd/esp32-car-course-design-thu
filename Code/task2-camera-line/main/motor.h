@@ -32,9 +32,10 @@ bool motor_is_enabled(void);
 /**
  * @brief 设置电机速度（带方向）
  * @param id       MOTOR_A / MOTOR_B / MOTOR_C
- * @param percent  -100 ~ +100（正=正转，负=反转，0=滑行停止）
+ * @param percent  -100 ~ +100，支持小数（PWM 10bit，约 0.1% 分辨率，
+ *                 供 0.5% 步进的现场微调；正=正转，负=反转，0=滑行停止）
  */
-void motor_set_speed(int id, int percent);
+void motor_set_speed(int id, float percent);
 
 /**
  * @brief 直接设置方向（PWM 保持原值）
