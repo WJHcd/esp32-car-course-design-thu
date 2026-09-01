@@ -33,8 +33,8 @@ bool motor_is_enabled(void);
  * @brief 设置电机速度（带方向）
  * @param id       MOTOR_A / MOTOR_B / MOTOR_C
  * @param percent  -100 ~ +100，支持小数；正=正转，负=反转，0=滑行停止。
- *                 极小指令按停止处理，低于电机有效启动出力的非零指令
- *                 会由驱动层自动补偿到最低有效档位。
+ *                 绝对值 <1% 的指令按停止处理（清理混控数值噪声），
+ *                 其余指令按原幅值输出，驱动层不做低速抬升。
  */
 void motor_set_speed(int id, float percent);
 

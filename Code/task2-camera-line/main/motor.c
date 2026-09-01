@@ -32,12 +32,13 @@
 #define MOTOR_PWM_RES       LEDC_TIMER_10_BIT   /* 0~1023 */
 #define MOTOR_PWM_MAX       1023
 
-/* 实车带载低速补偿：TB6612 的 PWM 能输出很小的占空比，但电机/轮胎的
- * 静摩擦使 1%~8% 左右的指令常常只嗡鸣不启动，人工推一下后才继续。
- * 小于 ZERO_BAND 的混控残差仍视为 0，避免 0.5% 数值噪声被放大；其余
- * 非零命令至少提升到 MIN_EFFECTIVE。该补偿只改变幅值，不改变方向。 */
+/* 混控残差清理：小于 ZERO_BAND 的指令（如 0.5% 档的数值噪声）按停止处理。
+ * ⚠️ 不要在此加"低于某档就抬升到最低有效出力"的全局补偿——2026-09-01
+ * 试验 9% 抬升后直线画龙：巡线的小修角本就依赖后轮 B 近似不动、仅靠
+ * 前轮差速实现，抬升使 B 在 ±1~4% 小修角时以 9% 出力，横摆过冲、PD
+ * 反复过调。个别阶段若出现起步嗡鸣卡死，在该阶段标定参数解决，
+ * 不动驱动层（驱动层无法区分"有意的小指令"和"被死区吃掉的大意图"）。 */
 #define MOTOR_COMMAND_ZERO_BAND_PCT   1.0f
-#define MOTOR_MIN_EFFECTIVE_PCT       9.0f
 
 static const gpio_num_t s_dir_pins[MOTOR_NUM][2] = {
     { GPIO_AIN1, GPIO_AIN2 },
@@ -167,10 +168,7 @@ void motor_set_speed(int id, float percent)
     }
 
     motor_dir_t dir = (percent > 0.0f) ? MOTOR_DIR_FORWARD : MOTOR_DIR_BACKWARD;
-    if (magnitude < MOTOR_MIN_EFFECTIVE_PCT) {
-        magnitude = MOTOR_MIN_EFFECTIVE_PCT;
-    }
-    /* 四舍五入到 duty 计数：10bit 下 1% ≈ 10.2 计数。 */
+    /* 四舍五入到 duty 计数：10bit 下 1% ≈ 10.2 计数，0.5% 微调可分辨。 */
     uint32_t duty = (uint32_t)(magnitude * MOTOR_PWM_MAX / 100.0f + 0.5f);
 
     /* 带载直接换向会产生很大的冲击电流；先清 PWM，滑行 200us 再换向。 */
