@@ -77,8 +77,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_B_GAIN       1.80f
 
 /* ------------------------ 控制参数区 ------------------------ */
-/* 直线基准速度（2026-09-01 现场 14→13.5）；弯道前进按 13.5-|turn|/2 联动 */
-#define LINE_BASE_SPEED_PCT       13.5f
+/* 直线基准速度（2026-09-01 现场 13.5→14）；弯道前进按 14-|turn|/2 联动 */
+#define LINE_BASE_SPEED_PCT       14.0f
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -127,8 +127,11 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
-#define OBSTACLE_TRIGGER_CM       15u
-#define OBSTACLE_CLEAR_CM         21u
+/* 现场标定（2026-09-01）：触发 15→13、撤除 21→19（保持 6cm 迟滞）。
+ * 此前实测车距板 16~17cm 时读数徘徊、距触发线仅 2cm 余量，易误触发；
+ * 调近后只在真正贴近板子时才触发避障。 */
+#define OBSTACLE_TRIGGER_CM       13u
+#define OBSTACLE_CLEAR_CM         19u
 #define OBSTACLE_CONFIRM_SAMPLES   2u
 #define OBSTACLE_SAMPLE_GAP_MS    350u
 
@@ -179,7 +182,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 超声 18cm 触发时车头距板约 18cm。
  *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
  *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
-#define AVOID_STRAFE_DIST_CM    12.0f   /* 初值：左移总距离 */
+#define AVOID_STRAFE_DIST_CM    13.0f   /* 现场标定 12→13：左移总距离 */
 #define AVOID_FORWARD_DIST_CM   14.0f   /* 初值：前进越过距离 */
 
 /* 由上面的距离/速度自动换算出各阶段时长（勿手改，改距离或速度即可）。 */
@@ -197,6 +200,13 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  *   （远离 T 干线），翻转成 -1。 */
 #define AVOID_FIND_LINE_MS      2500u   /* 找线总超时；超时进 FAILSAFE_STOP */
 #define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（须 > MOTOR_DEADZONE_PCT） */
+/* 找线右移速度（2026-09-01）：曾降到 10% 想给摄像头留确认时间，但
+ * A/C 前轮指令随之落到 9~10%，进入电机死区压缩段出力不足，后轮 B
+ * （约 18%）相对偏快，右移时产生逆时针自旋。12% 是 MODE=5 标定过
+ * "三轮均能正常出力"的平移档，恢复之。若 12% 下摄像头确实跟不上，
+ * 优先调 camera_line.h 的稳定帧要求（CAM_STABLE_SAMPLES/CAM_SETTLE_MS），
+ * 不要再降平移速度——死区会让三轮失配、自旋复发。 */
+#define AVOID_FIND_STRAFE_PCT    12
 #define AVOID_FORWARD_SPEED_PCT  15     /* 避障前进速度档 */
 #define AVOID_FIND_SPEED_PCT     10     /* 找线前进速度档 */
 #define AVOID_SCAN_TURN_PCT       5     /* 找线扫描转向幅度 */
@@ -418,7 +428,7 @@ static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
  * ============================================================ */
 #define CAM_ERR_BIG       0.45f   /* |err| 超过此值视为"外侧探头命中"（弯道前兆） */
 #define CAM_ERR_SCALE     4.0f   /* 归一化摄像头误差转换为可用的转向量 */
-/* 终点横杆必须有至少三条“横向黑色覆盖 >=65%”的采样行。 */
+/* 终点横杆必须有至少三条“横向黑色覆盖 >= CAM_WIDE_ROW_PCT%”的采样行。 */
 #define CAM_T_LINE_MIN_WIDE_ROWS  3u
 
 /* 把摄像头结果包装成巡线控制器需要的上下文 */
@@ -672,9 +682,12 @@ void walking_update_cam(const camera_line_result_t *cam,
         /*
          * 绕过木板后向【右】平移找回黑线（2026-08-27 按实车联调修改：
          * 原方案"前进+转向扫描"实测表现为向右转，不符合赛道需求）。
-         * 平移方向由 STRAFE_SIGN_* 标定保证 strafe<0=向右；任何非全白
-         * 即视为见线，恢复 RUN 回到原巡线模式（滤波器干净重启，
-         * 不带避障期旧误差）。超时仍未见到线则进 FAILSAFE_STOP。
+         * 平移方向由 STRAFE_SIGN_* 标定保证 strafe<0=向右；任一稳定帧
+         * 见线即恢复 RUN（滤波器干净重启，不带避障期旧误差）。
+         * 超时仍未见到线则进 FAILSAFE_STOP。
+         * 【2026-09-01】曾试验"最短右移 500ms 后才允许退出"以防接回
+         * 旧线段，实测右移过头冲过线，已回退。旧线段干扰若复现，改用
+         * 出口方向条件（仅接受 |err| 较小的稳定帧）解决。
          */
         if (s_cam_new_frame && s_cam.has_line &&
             s_last_cam_frame_seq > s_avoid_find_line_start_seq) {
@@ -693,8 +706,8 @@ void walking_update_cam(const camera_line_result_t *cam,
             apply_brake();
             break;
         }
-        /* strafe<0 = 向右平移（速度复用避障平移档） */
-        apply_body_command(0, 0, -AVOID_STRAFE_SPEED_PCT);
+        /* strafe<0 = 向右平移（与左移同档；降速会触发死区失配自旋，见宏说明） */
+        apply_body_command(0, 0, -AVOID_FIND_STRAFE_PCT);
         break;
 
     case CAR_STATE_FINISH_STOP:

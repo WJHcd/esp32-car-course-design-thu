@@ -258,7 +258,8 @@ static void uvc_driver_event_cb(const uvc_host_driver_event_data_t *event, void 
  * CAM_BIN_THRESHOLD 二值化（imbinarize 全局阈值用法），逐列统计：
  * 过半采样行为黑的列视为"虚拟探头命中"。误差 = 命中列在窗口内
  * 的归一化位置均值；a/b/c/d 四等分桶输出 line_pattern 供诊断，
- * 窗口内黑色覆盖 >=65% 的行计入 wide_black_rows（T 线判定不变）。
+ * 窗口内黑色覆盖 >= CAM_WIDE_ROW_PCT% 的行计入 wide_black_rows
+ * （T 线判定不变）。
  * ============================================================ */
 #define CAM_SCAN_MAX_WINDOW  (CAM_MAX_WIDTH * CAM_SCAN_WIDTH_PCT / 100 + 1)
 
@@ -303,7 +304,7 @@ static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_r
         if (row_black >= CAM_LINE_MIN_COLUMNS) {
             rows_with_line++;
         }
-        if ((uint32_t)row_black * 100u >= (uint32_t)win_w * 65u) {
+        if ((uint32_t)row_black * 100u >= (uint32_t)win_w * CAM_WIDE_ROW_PCT) {
             wide_rows++;
         }
     }
