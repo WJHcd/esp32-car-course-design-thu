@@ -127,6 +127,19 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
+/*
+ * 弯道出口起步助推（2026-09-01）：CORNER_SEARCH 停车确认出口后直接回
+ * RUN，此时弯道混控(F=6.5,T=±9)给出 A≈2.5%、B≈6.1%、C≈15.5% 的不对称
+ * 低速输出，A/B 低于死区无法从静止克服摩擦，车停在出口处需要人工轻推。
+ * 新增 CORNER_EXIT_LAUNCH 状态：确认出口后先执行 ~140ms 纯前进助推
+ * （A/C 前轮对称获得约 11% 的可靠启动输出，B 轮不动、不引入额外横摆），
+ * 结束后再清一次控制历史并进入 RUN。
+ * 调参：仍无法启动 → 先把时长增至 160~180ms，再考虑提速至 12%；
+ *       冲得太远   → 时长降至 100~120ms。
+ */
+#define CORNER_EXIT_LAUNCH_SPEED_PCT  11.0f
+#define CORNER_EXIT_LAUNCH_MS          140u
+
 /* 现场标定（2026-09-01）：触发距离 15→13cm。
  * 必须连续两次有效测距都 <=13cm；任意一次 >13cm 或有效样本间隔过长
  * 都会清零计数，避免两个不相邻的近距离毛刺误触发避障。 */
@@ -161,8 +174,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  *   └────────────────────────┴──────────────────────────────────┘
  * ============================================================ */
 
-/* 电机低速死区补偿已统一放在 motor.c：很小的指令按停止处理，非零但低于
- * 最低有效出力的指令会抬升到可启动档位，避免某个轮子静摩擦卡住。 */
+/* 电机低速处理在 motor.c：<1% 指令按停止清理噪声，其余按原幅值输出
+ * （不做全局抬升——那会把巡线小修角时后轮 B 的微小修正放大，直线画龙）。
+ * 弯道出口的起步问题改由 CORNER_EXIT_LAUNCH 状态解决，见下方宏说明。 */
 
 /* [标定#1/#2/#4] 平移方向与纯度 —— 已标定通过（见文件顶部 v3 区）：
  * SIGN 全 -1、B_GAIN=1.80。此处不再重复定义。 */
@@ -215,6 +229,7 @@ static const char *const s_state_name[] = {
     "RUN",
     "LINE_SEARCH",
     "CORNER_SEARCH",
+    "CORNER_EXIT_LAUNCH",
     "AVOID_STOP",
     "AVOID_STRAFE_LEFT",
     "AVOID_FORWARD",
@@ -646,14 +661,16 @@ void walking_update_cam(const camera_line_result_t *cam,
             }
 
             if (s_corner_exit_samples >= LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
-                s_cam = *cam;   /* 用最新原始帧刷新视觉量，恢复后立即可控 */
+                /* 保存最新视觉量并清理旧误差；不直接回 RUN——弯道混控的
+                 * 不对称低速输出无法从静止起步，先进起步助推状态。 */
+                s_cam = *cam;
                 s_last_error = 0.0f;
                 s_filtered_error = 0.0f;
                 s_error_filter_valid = false;
                 s_line_lost_timing = false;
                 s_last_line_was_corner = false;
-                enter_state(CAR_STATE_RUN, now_ms);
-                run_line_controller_cam(now_ms);
+                enter_state(CAR_STATE_CORNER_EXIT_LAUNCH, now_ms);
+                apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
                 break;
             }
 
@@ -673,6 +690,25 @@ void walking_update_cam(const camera_line_result_t *cam,
         }
         break;
     }
+
+    case CAR_STATE_CORNER_EXIT_LAUNCH:
+        /*
+         * 出口起步助推：纯前进使 A/C 前轮对称获得高于死区的启动输出，
+         * B 轮不动（不引入额外横摆）。助推结束再清一次控制历史，并把
+         * 视觉量刷新为最新可用帧后进入 RUN，恢复正常巡线。
+         */
+        apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
+        if (elapsed_ms(now_ms, s_state_enter_ms) >= CORNER_EXIT_LAUNCH_MS) {
+            s_cam = *cam;
+            s_last_cam_frame_seq = cam->frame_seq;
+            s_last_error = 0.0f;
+            s_filtered_error = 0.0f;
+            s_error_filter_valid = false;
+            s_line_lost_timing = false;
+            enter_state(CAR_STATE_RUN, now_ms);
+            run_line_controller_cam(now_ms);
+        }
+        break;
 
     case CAR_STATE_AVOID_STOP:
         apply_brake();
