@@ -127,19 +127,17 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
-/* 现场标定（2026-09-01）：触发 15→13、撤除 21→19（保持 6cm 迟滞）。
- * 此前实测车距板 16~17cm 时读数徘徊、距触发线仅 2cm 余量，易误触发；
- * 调近后只在真正贴近板子时才触发避障。 */
+/* 现场标定（2026-09-01）：触发距离 15→13cm。
+ * 必须连续两次有效测距都 <=13cm；任意一次 >13cm 或有效样本间隔过长
+ * 都会清零计数，避免两个不相邻的近距离毛刺误触发避障。 */
 #define OBSTACLE_TRIGGER_CM       13u
-#define OBSTACLE_CLEAR_CM         19u
 #define OBSTACLE_CONFIRM_SAMPLES   2u
 #define OBSTACLE_SAMPLE_GAP_MS    350u
 
 /* ---- 终点 T 线停车参数（2026-08-27 新增）----
- * 避障完成回到巡线后，四路全黑连续 FINISH_CONFIRM_SAMPLES 拍即判定
- * 到达赛道末尾 T 线（横杆宽度足以同时压住四个探头），刹车结束任务。
- * 赛道前半段该检测不生效（未武装），不会误停。 */
-#define FINISH_CONFIRM_SAMPLES     3u
+ * 避障完成回到巡线后，摄像头连续 FINISH_CONFIRM_SAMPLES 帧看到足够多的
+ * 宽黑行即判定到达 T 线横杆并刹车。赛道前半段检测未武装，不会误停。 */
+#define FINISH_CONFIRM_SAMPLES     2u
 
 /* ============================================================
  * 避障时序参数 —— 赛道标定接口（2026-08-27）
@@ -163,9 +161,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  *   └────────────────────────┴──────────────────────────────────┘
  * ============================================================ */
 
-/* [标定#6] 电机死区下限：低于该值轮子可能不转。MODE=5 实测平移/前进均能
- * 正常启动，说明当前三档速度(12/15/10%)高于死区，暂按 8% 保留。 */
-#define MOTOR_DEADZONE_PCT       8
+/* 电机低速死区补偿已统一放在 motor.c：很小的指令按停止处理，非零但低于
+ * 最低有效出力的指令会抬升到可启动档位，避免某个轮子静摩擦卡住。 */
 
 /* [标定#1/#2/#4] 平移方向与纯度 —— 已标定通过（见文件顶部 v3 区）：
  * SIGN 全 -1、B_GAIN=1.80。此处不再重复定义。 */
@@ -199,7 +196,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * [标定#17] 扫描偏置方向：初值 +1（左偏扫）；若试跑发现扫向错误一侧
  *   （远离 T 干线），翻转成 -1。 */
 #define AVOID_FIND_LINE_MS      2500u   /* 找线总超时；超时进 FAILSAFE_STOP */
-#define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（须 > MOTOR_DEADZONE_PCT） */
+#define AVOID_FIND_CENTER_ERR   0.35f   /* 目标线进入画面中央后停车确认 */
+#define AVOID_FIND_CONFIRM_SAMPLES 2u   /* 首帧停车，静止确认第二帧 */
+#define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（高于 motor.c 最低有效出力） */
 /* 找线右移速度（2026-09-01）：曾降到 10% 想给摄像头留确认时间，但
  * A/C 前轮指令随之落到 9~10%，进入电机死区压缩段出力不足，后轮 B
  * （约 18%）相对偏快，右移时产生逆时针自旋。12% 是 MODE=5 标定过
@@ -396,7 +395,12 @@ static bool state_accepts_obstacle_trigger(void)
 static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
 {
     if (distance_cm == ULTRASONIC_INVALID) {
-        return false;  /* 无新样本时不增加也不清空计数 */
+        /* 短暂测量失败不破坏连续性；但长时间没有有效样本必须清零，
+         * 避免一次旧的近距离毛刺永久留在确认计数里。 */
+        if (elapsed_ms(now_ms, s_last_distance_sample_ms) > OBSTACLE_SAMPLE_GAP_MS) {
+            s_obstacle_samples = 0;
+        }
+        return false;
     }
 
     if (elapsed_ms(now_ms, s_last_distance_sample_ms) > OBSTACLE_SAMPLE_GAP_MS) {
@@ -408,7 +412,9 @@ static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
         if (s_obstacle_samples < OBSTACLE_CONFIRM_SAMPLES) {
             s_obstacle_samples++;
         }
-    } else if (distance_cm >= OBSTACLE_CLEAR_CM) {
+    } else {
+        /* 触发前要求真正连续的近距离样本。旧逻辑在 14~18cm 区间既不
+         * 累加也不清零，两个相隔很久的 13cm 毛刺也会误触发避障。 */
         s_obstacle_samples = 0;
     }
 
@@ -446,6 +452,12 @@ static bool cam_all_black(void)
     /* 普通纵向黑线也会穿过很多扫描行，不能仅依赖 black_rows。
      * 终点横杆的区分特征是：连续多行在横向上大面积（>=65%）变黑。 */
     return s_cam.has_line && s_cam.wide_black_rows >= CAM_T_LINE_MIN_WIDE_ROWS;
+}
+
+static bool cam_is_finish_marker(const camera_line_result_t *cam)
+{
+    return cam != NULL && cam->has_line &&
+           cam->wide_black_rows >= CAM_T_LINE_MIN_WIDE_ROWS;
 }
 
 void walking_init(void)
@@ -530,20 +542,30 @@ void walking_update_cam(const camera_line_result_t *cam,
     switch (s_state) {
     case CAR_STATE_RUN:
         /*
-         * 终点 T 线检测（仅在避障完成后武装）：画面大面积黑连续 3 拍
-         * 判定到达赛道末尾，进 FINISH_STOP 永久停车。
+         * 终点 T 线检测（仅在避障完成后武装）：使用原始新帧，第一帧
+         * 宽黑候选立即停车，静止确认第二帧。旧逻辑边以 8% 前进边等
+         * 3 个稳定帧，横杆较窄时会在确认完成前驶过终点。
          */
-        if (s_finish_armed && cam_all_black()) {
-            if (s_cam_new_frame && s_finish_samples < FINISH_CONFIRM_SAMPLES) {
-                s_finish_samples++;
+        if (s_finish_armed) {
+            if (s_cam_new_raw_frame) {
+                if (cam_is_finish_marker(cam)) {
+                    if (s_finish_samples < FINISH_CONFIRM_SAMPLES) {
+                        s_finish_samples++;
+                    }
+                } else {
+                    s_finish_samples = 0;
+                }
             }
+
             if (s_finish_samples >= FINISH_CONFIRM_SAMPLES) {
                 enter_state(CAR_STATE_FINISH_STOP, now_ms);
                 apply_brake();
                 break;
             }
-        } else if (s_cam_new_frame) {
-            s_finish_samples = 0;
+            if (s_finish_samples > 0u) {
+                apply_brake();  /* 首帧候选后保持静止，等待下一张原始帧 */
+                break;
+            }
         }
 
         run_line_controller_cam(now_ms);   /* 内部改用 s_cam */
@@ -673,7 +695,8 @@ void walking_update_cam(const camera_line_result_t *cam,
         /* 直行前进越过木板；结束时整车应已出板、位于板内 T 线附近。 */
         apply_body_command(AVOID_FORWARD_SPEED_PCT, 0, 0);
         if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_FORWARD_CALC_MS) {
-            s_avoid_find_line_start_seq = s_last_cam_frame_seq;
+            /* 找线阶段按原始帧判断，起始序号也必须使用原始帧序号。 */
+            s_avoid_find_line_start_seq = s_last_cam_raw_frame_seq;
             enter_state(CAR_STATE_AVOID_FIND_LINE, now_ms);
         }
         break;
@@ -682,15 +705,26 @@ void walking_update_cam(const camera_line_result_t *cam,
         /*
          * 绕过木板后向【右】平移找回黑线（2026-08-27 按实车联调修改：
          * 原方案"前进+转向扫描"实测表现为向右转，不符合赛道需求）。
-         * 平移方向由 STRAFE_SIGN_* 标定保证 strafe<0=向右；任一稳定帧
-         * 见线即恢复 RUN（滤波器干净重启，不带避障期旧误差）。
-         * 超时仍未见到线则进 FAILSAFE_STOP。
-         * 【2026-09-01】曾试验"最短右移 500ms 后才允许退出"以防接回
-         * 旧线段，实测右移过头冲过线，已回退。旧线段干扰若复现，改用
-         * 出口方向条件（仅接受 |err| 较小的稳定帧）解决。
+         * 平移方向由 STRAFE_SIGN_* 标定保证 strafe<0=向右。目标线进入
+         * 画面中央范围后，第一张原始帧立即停车，静止确认第二帧再恢复
+         * RUN；避免边横移边等待 stable 的 600~900ms 延迟导致越过黑线。
+         * 中央门控同时排除仍留在画面边缘的入口旧线段。
          */
-        if (s_cam_new_frame && s_cam.has_line &&
-            s_last_cam_frame_seq > s_avoid_find_line_start_seq) {
+        if (s_cam_new_raw_frame && cam->frame_seq > s_avoid_find_line_start_seq) {
+            const bool centered_line = cam->has_line &&
+                                       fabsf(cam->error) <= AVOID_FIND_CENTER_ERR;
+            if (centered_line) {
+                if (s_line_reacquire_samples < AVOID_FIND_CONFIRM_SAMPLES) {
+                    s_line_reacquire_samples++;
+                }
+            } else {
+                s_line_reacquire_samples = 0;
+            }
+        }
+
+        if (s_line_reacquire_samples >= AVOID_FIND_CONFIRM_SAMPLES) {
+            s_cam = *cam;
+            s_last_cam_frame_seq = cam->frame_seq;
             s_last_error = 0.0f;
             s_filtered_error = 0.0f;
             s_error_filter_valid = false;
@@ -706,8 +740,12 @@ void walking_update_cam(const camera_line_result_t *cam,
             apply_brake();
             break;
         }
-        /* strafe<0 = 向右平移（与左移同档；降速会触发死区失配自旋，见宏说明） */
-        apply_body_command(0, 0, -AVOID_FIND_STRAFE_PCT);
+        if (s_line_reacquire_samples > 0u) {
+            apply_brake();  /* 首帧进入中央范围，静止等第二帧确认 */
+        } else {
+            /* strafe<0 = 向右平移（降速会触发死区失配自旋，见宏说明） */
+            apply_body_command(0, 0, -AVOID_FIND_STRAFE_PCT);
+        }
         break;
 
     case CAR_STATE_FINISH_STOP:

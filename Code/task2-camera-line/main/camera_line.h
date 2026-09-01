@@ -68,7 +68,7 @@ typedef struct {
     bool stable;          /* has_line 已连续多帧一致；见线还满足姿态稳定等待 */
     float error;          /* 质心水平误差 [-1,+1]，左负右正，0=扫描窗中心 */
     uint16_t black_rows;  /* 扫描带内检出黑线的行数（诊断用） */
-    uint16_t wide_black_rows; /* 黑色覆盖窗口 >= 65% 的行数（T 线判定用） */
+    uint16_t wide_black_rows; /* 黑色覆盖窗口 >= CAM_WIDE_ROW_PCT% 的行数（T 线用） */
     uint8_t line_pattern; /* 仿真红外 a/b/c/d 图案：bit3~bit0 = a(左外)~d(右外) */
     uint32_t frame_seq;   /* 每成功解码一帧递增一次，避免主循环重复消费旧帧 */
 } camera_line_result_t;
