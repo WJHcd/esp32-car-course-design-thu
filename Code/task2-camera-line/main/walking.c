@@ -132,9 +132,18 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 反复凑近/折返，往 0.5~0.7 回调；若出口接不住的现象仍在，问题可能
  * 不在此参数（查方向锁定侧别或摄像头帧时机）。 */
 #define LINE_CORNER_EXIT_MIN_ERR     0.30f
-/* 总兜底时间：超时进故障停车，避免无限原地空转。FAILSAFE 的自动恢复
- * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
+/* 锐角单向找出口的最长时间；超时后直接转入可换向的 LINE_SEARCH，
+ * 不再先刹停 2 秒。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
+
+/* 第一帧候选会让整车静止等待确认；若下一帧确认失败，先用短促较大转向
+ * 克服 B/C 轮静摩擦，再恢复 LINE_SEARCH_TURN_PCT 的常规慢速扫描。 */
+#define SEARCH_RESTART_KICK_TURN_PCT     14
+#define SEARCH_RESTART_KICK_MS          100u
+
+/* 已经真正经历过无线路面后，重新出现在画面中央的黑线也可作为弯道出口。
+ * 这避免车头已经对准黑线，却因 |error|<LINE_CORNER_EXIT_MIN_ERR 被拒绝。 */
+#define LINE_CORNER_CENTER_EXIT_ERR    0.25f
 
 /* FAILSAFE 自动重启（2026-09-01）：故障停车不再是终点——刹停满此时长
  * 仍未被动恢复（5 稳定帧见线），就重新进入 LINE_SEARCH 主动找线。
@@ -146,14 +155,16 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 弯道出口起步助推（2026-09-01）：CORNER_SEARCH 停车确认出口后直接回
  * RUN，此时弯道混控(F=6.5,T=±9)给出 A≈2.5%、B≈6.1%、C≈15.5% 的不对称
  * 低速输出，A/B 低于死区无法从静止克服摩擦，车停在出口处需要人工轻推。
- * 新增 CORNER_EXIT_LAUNCH 状态：确认出口后先执行 ~140ms 纯前进助推
- * （A/C 前轮对称获得约 12% 的可靠启动输出，B 轮不动、不引入额外横摆），
- * 结束后再清一次控制历史并进入 RUN。
- * 调参记录：2026-09-01 现场 11%→12%（实车反馈主推力度不足）。
- * 仍无法启动 → 先把时长增至 160~180ms；冲得太远 → 时长降至 100~120ms。
+ * CORNER_EXIT_LAUNCH 现作为所有“停车确认后恢复巡线”的通用助推状态：
+ * 第一阶段纯前进启动 A/C；若确认帧仍有明显横向误差，第二阶段短促带转向
+ * 启动 B 并接上弯道，随后才进入 RUN。驱动层仍不做全局低速抬升。
  */
 #define CORNER_EXIT_LAUNCH_SPEED_PCT  12.0f
-#define CORNER_EXIT_LAUNCH_MS          140u
+#define CORNER_EXIT_LAUNCH_FORWARD_MS  100u
+#define CORNER_EXIT_LAUNCH_TURN_FORWARD_PCT  8.0f
+#define CORNER_EXIT_LAUNCH_TURN_PCT     14
+#define CORNER_EXIT_LAUNCH_TURN_MS      100u
+#define REACQUIRE_TURN_REQUIRED_ERR    0.30f
 
 /* 现场标定（2026-09-01）：触发距离 15→13cm。
  * 必须连续两次有效测距都 <=13cm；任意一次 >13cm 或有效样本间隔过长
@@ -291,6 +302,15 @@ static int s_corner_turn_side;
 static float s_filtered_error;
 static bool s_error_filter_valid;
 static walking_command_t s_last_command;
+/* 搜索候选确认失败后的短促旋转起步，以及通用恢复助推上下文。 */
+static bool s_search_restart_kick_active;
+static uint32_t s_search_restart_kick_start_ms;
+static bool s_corner_saw_no_line;
+static bool s_launch_turn_required;
+static int s_launch_turn_side;
+/* 把摄像头结果包装成巡线控制器需要的上下文。 */
+static camera_line_result_t s_cam;
+static camera_line_result_t s_launch_confirmed_cam;
 /* 当前生效的平移后轮增益：全局 STRAFE_B_GAIN，仅找线状态临时替换为
  * STRAFE_B_GAIN_FIND（进入新状态时由 enter_state 恢复全局值） */
 static float s_strafe_b_gain = STRAFE_B_GAIN;
@@ -319,6 +339,10 @@ static void enter_state(car_state_t state, uint32_t now_ms)
     s_state = state;
     s_state_enter_ms = now_ms;
     s_line_reacquire_samples = 0;
+    s_search_restart_kick_active = false;
+    if (state == CAR_STATE_CORNER_SEARCH) {
+        s_corner_saw_no_line = false;
+    }
     s_strafe_b_gain = STRAFE_B_GAIN;   /* 切换状态恢复全局平移增益 */
 }
 
@@ -369,6 +393,63 @@ static void apply_brake(void)
     if (s_output_enabled) {
         motor_stop_all();
     }
+}
+
+static void reset_line_control_history(void)
+{
+    s_last_error = 0.0f;
+    s_filtered_error = 0.0f;
+    s_error_filter_valid = false;
+    s_line_lost_timing = false;
+    s_last_line_was_corner = false;
+}
+
+/* 所有“停车确认后恢复巡线”的路径统一从这里进入助推状态。 */
+static void enter_reacquire_launch(const camera_line_result_t *cam,
+                                   bool force_turn,
+                                   int preferred_turn_side,
+                                   uint32_t now_ms)
+{
+    if (cam != NULL && cam->has_line) {
+        s_cam = *cam;
+    }
+    s_launch_confirmed_cam = s_cam;
+
+    reset_line_control_history();
+    enter_state(CAR_STATE_CORNER_EXIT_LAUNCH, now_ms);
+
+    s_launch_turn_required = force_turn ||
+                             (s_cam.has_line &&
+                              fabsf(s_cam.error) >= REACQUIRE_TURN_REQUIRED_ERR);
+    if (preferred_turn_side != 0) {
+        s_launch_turn_side = preferred_turn_side < 0 ? -1 : +1;
+    } else if (s_cam.has_line && fabsf(s_cam.error) >= CAM_CENTER_DEADBAND) {
+        s_launch_turn_side = s_cam.error < 0.0f ? -1 : +1;
+    } else {
+        s_launch_turn_side = s_last_line_side < 0 ? -1 : +1;
+    }
+
+    /* 同一控制周期立即输出，避免状态切换后多空等 20ms。 */
+    apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
+}
+
+static void start_search_restart_kick(uint32_t now_ms)
+{
+    s_search_restart_kick_active = true;
+    s_search_restart_kick_start_ms = now_ms;
+}
+
+static bool search_restart_kick_active(uint32_t now_ms)
+{
+    if (!s_search_restart_kick_active) {
+        return false;
+    }
+    if (elapsed_ms(now_ms, s_search_restart_kick_start_ms) >=
+        SEARCH_RESTART_KICK_MS) {
+        s_search_restart_kick_active = false;
+        return false;
+    }
+    return true;
 }
 
 /* 仅测试/标定用：绕过状态机直接驱动三轴（见 walking.h）。 */
@@ -477,9 +558,6 @@ static bool obstacle_confirmed(uint16_t distance_cm, uint32_t now_ms)
 /* 终点横杆必须有至少三条“横向黑色覆盖 >= CAM_WIDE_ROW_PCT%”的采样行。 */
 #define CAM_T_LINE_MIN_WIDE_ROWS  3u
 
-/* 把摄像头结果包装成巡线控制器需要的上下文 */
-static camera_line_result_t s_cam;
-
 static void run_line_controller_cam(uint32_t now_ms);
 
 static bool cam_is_sharp_corner(void)
@@ -521,6 +599,12 @@ void walking_reset(uint32_t now_ms)
     s_last_line_side = +1;
     s_line_side_accum = 0;
     s_corner_turn_side = +1;
+    s_corner_saw_no_line = false;
+    s_search_restart_kick_active = false;
+    s_search_restart_kick_start_ms = now_ms;
+    s_launch_turn_required = false;
+    s_launch_turn_side = +1;
+    s_launch_confirmed_cam = (camera_line_result_t){0};
     s_filtered_error = 0.0f;
     s_error_filter_valid = false;
     s_finish_armed = false;
@@ -589,6 +673,8 @@ void walking_update_cam(const camera_line_result_t *cam,
     }
 #endif
 
+    bool finish_candidate_cleared = false;
+
     switch (s_state) {
     case CAR_STATE_RUN:
         /*
@@ -603,6 +689,7 @@ void walking_update_cam(const camera_line_result_t *cam,
                         s_finish_samples++;
                     }
                 } else {
+                    finish_candidate_cleared = s_finish_samples > 0u;
                     s_finish_samples = 0;
                 }
             }
@@ -614,6 +701,11 @@ void walking_update_cam(const camera_line_result_t *cam,
             }
             if (s_finish_samples > 0u) {
                 apply_brake();  /* 首帧候选后保持静止，等待下一张原始帧 */
+                break;
+            }
+            if (finish_candidate_cleared && cam->has_line) {
+                /* 假终点候选曾让整车刹停；恢复巡线也要经过通用起步助推。 */
+                enter_reacquire_launch(cam, false, 0, now_ms);
                 break;
             }
         }
@@ -636,25 +728,28 @@ void walking_update_cam(const camera_line_result_t *cam,
         if (s_cam_new_raw_frame) {
             if (cam->has_line) {
                 if (++s_line_reacquire_samples >= 2) {
-                    s_cam = *cam;
-                    s_last_error = 0.0f;
-                    s_filtered_error = 0.0f;
-                    s_error_filter_valid = false;
-                    s_line_lost_timing = false;
-                    enter_state(CAR_STATE_RUN, now_ms);
-                    run_line_controller_cam(now_ms);
+                    enter_reacquire_launch(cam, false, 0, now_ms);
                     break;
                 }
                 /* 首帧见线：落到下方静止等待确认帧，不再继续转 */
             } else {
+                if (s_line_reacquire_samples > 0u) {
+                    start_search_restart_kick(now_ms);
+                }
                 s_line_reacquire_samples = 0;
             }
         }
 
 #if LINE_SEARCH_TIMEOUT_MS > 0u
         if (elapsed_ms(now_ms, s_state_enter_ms) >= LINE_SEARCH_TIMEOUT_MS) {
-            enter_state(CAR_STATE_FAILSAFE_STOP, now_ms);
-            apply_brake();
+            /* 普通找线超时不再刹停 2 秒；翻转优先侧并立即开始新一轮扫描。 */
+            s_last_line_side = -s_last_line_side;
+            enter_state(CAR_STATE_LINE_SEARCH, now_ms);
+            start_search_restart_kick(now_ms);
+            apply_body_command(0,
+                               s_last_line_side * STEERING_SIGN *
+                                   SEARCH_RESTART_KICK_TURN_PCT,
+                               0);
             break;
         }
 #endif
@@ -666,7 +761,12 @@ void walking_update_cam(const camera_line_result_t *cam,
              * 方向猜错时也能自行摆回来。 */
             const int sweep_sign =
                 ((elapsed_ms(now_ms, s_state_enter_ms) / LINE_SEARCH_SWEEP_MS) & 1u) ? -1 : +1;
-            apply_body_command(0, s_last_line_side * sweep_sign * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
+            const int turn_pct = search_restart_kick_active(now_ms)
+                                     ? SEARCH_RESTART_KICK_TURN_PCT
+                                     : LINE_SEARCH_TURN_PCT;
+            apply_body_command(0,
+                               s_last_line_side * sweep_sign * STEERING_SIGN * turn_pct,
+                               0);
         }
         break;
     }
@@ -675,6 +775,9 @@ void walking_update_cam(const camera_line_result_t *cam,
         /* 出口判定用最新原始帧（A2 修复）：旋转中 s_cam 只随稳定帧更新，
          * 会长期停留在旧数据上；cam 为最近一帧结果，按帧到来时才计数。 */
         const bool has_line = cam->has_line;
+        if (s_cam_new_raw_frame && !has_line) {
+            s_corner_saw_no_line = true;
+        }
 
         /*
          * 出口判定（2026-09-01 重构）：见线且线出现在当前转向一侧、幅值
@@ -686,9 +789,12 @@ void walking_update_cam(const camera_line_result_t *cam,
          * 不再定时反向：单向持续旋转下方向猜错也能扫到出口（见参数区
          * 说明），到点反向反而会退掉已转过的角度。
          */
-        const bool exit_candidate =
-            has_line && ((s_corner_turn_side < 0) ? (cam->error < -LINE_CORNER_EXIT_MIN_ERR)
-                                                  : (cam->error >  LINE_CORNER_EXIT_MIN_ERR));
+        const bool same_side_exit =
+            (s_corner_turn_side < 0) ? (cam->error < -LINE_CORNER_EXIT_MIN_ERR)
+                                     : (cam->error >  LINE_CORNER_EXIT_MIN_ERR);
+        const bool centered_exit = s_corner_saw_no_line &&
+                                   fabsf(cam->error) <= LINE_CORNER_CENTER_EXIT_ERR;
+        const bool exit_candidate = has_line && (same_side_exit || centered_exit);
 
         if (exit_candidate) {
             if (s_cam_new_raw_frame && s_corner_exit_samples < LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
@@ -696,53 +802,71 @@ void walking_update_cam(const camera_line_result_t *cam,
             }
 
             if (s_corner_exit_samples >= LINE_CORNER_EXIT_CONFIRM_SAMPLES) {
-                /* 保存最新视觉量并清理旧误差；不直接回 RUN——弯道混控的
-                 * 不对称低速输出无法从静止起步，先进起步助推状态。 */
-                s_cam = *cam;
-                s_last_error = 0.0f;
-                s_filtered_error = 0.0f;
-                s_error_filter_valid = false;
-                s_line_lost_timing = false;
-                s_last_line_was_corner = false;
-                enter_state(CAR_STATE_CORNER_EXIT_LAUNCH, now_ms);
-                apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
+                /* 锐角出口恢复必须带第二阶段转向助推，启动此前静止的 B 轮。 */
+                enter_reacquire_launch(cam, true, s_corner_turn_side, now_ms);
                 break;
             }
 
             apply_body_command(0, 0, 0);   /* 候选帧立即停车，静止画面下确认最可靠 */
         } else {
             if (s_cam_new_raw_frame) {
+                if (s_corner_exit_samples > 0u) {
+                    start_search_restart_kick(now_ms);
+                }
                 s_corner_exit_samples = 0;
             }
             /* 按锁定方向持续慢转，直到见线确认或总超时 */
+            const int turn_pct = search_restart_kick_active(now_ms)
+                                     ? SEARCH_RESTART_KICK_TURN_PCT
+                                     : LINE_SEARCH_TURN_PCT;
             apply_body_command(0,
-                               s_corner_turn_side * STEERING_SIGN * LINE_SEARCH_TURN_PCT, 0);
+                               s_corner_turn_side * STEERING_SIGN * turn_pct,
+                               0);
         }
 
         if (elapsed_ms(now_ms, s_state_enter_ms) >= LINE_CORNER_TIMEOUT_MS) {
-            enter_state(CAR_STATE_FAILSAFE_STOP, now_ms);
-            apply_brake();
+            /* 锁定方向未找到出口时，直接切换到反侧优先的双向扫描。 */
+            s_last_line_side = -s_corner_turn_side;
+            enter_state(CAR_STATE_LINE_SEARCH, now_ms);
+            start_search_restart_kick(now_ms);
+            apply_body_command(0,
+                               s_last_line_side * STEERING_SIGN *
+                                   SEARCH_RESTART_KICK_TURN_PCT,
+                               0);
         }
         break;
     }
 
     case CAR_STATE_CORNER_EXIT_LAUNCH:
         /*
-         * 出口起步助推：纯前进使 A/C 前轮对称获得高于死区的启动输出，
-         * B 轮不动（不引入额外横摆）。助推结束再清一次控制历史，并把
-         * 视觉量刷新为最新可用帧后进入 RUN，恢复正常巡线。
+         * 通用恢复助推：先纯前进启动 A/C；若黑线仍明显偏侧，再用短促
+         * 带方向助推启动 B。只采用新的有效见线帧，避免瞬时丢线覆盖
+         * 进入本状态前已经确认过的 s_cam。
          */
-        apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
-        if (elapsed_ms(now_ms, s_state_enter_ms) >= CORNER_EXIT_LAUNCH_MS) {
-            s_cam = *cam;
-            s_last_cam_frame_seq = cam->frame_seq;
-            s_last_error = 0.0f;
-            s_filtered_error = 0.0f;
-            s_error_filter_valid = false;
-            s_line_lost_timing = false;
-            enter_state(CAR_STATE_RUN, now_ms);
-            run_line_controller_cam(now_ms);
+        if (elapsed_ms(now_ms, s_state_enter_ms) <
+            CORNER_EXIT_LAUNCH_FORWARD_MS) {
+            apply_body_command(CORNER_EXIT_LAUNCH_SPEED_PCT, 0, 0);
+            break;
         }
+
+        if (s_launch_turn_required &&
+            elapsed_ms(now_ms, s_state_enter_ms) <
+                CORNER_EXIT_LAUNCH_FORWARD_MS + CORNER_EXIT_LAUNCH_TURN_MS) {
+            apply_body_command(CORNER_EXIT_LAUNCH_TURN_FORWARD_PCT,
+                               s_launch_turn_side * STEERING_SIGN *
+                                   CORNER_EXIT_LAUNCH_TURN_PCT,
+                               0);
+            break;
+        }
+
+        if (s_cam_new_raw_frame && cam->has_line) {
+            s_cam = *cam;
+        } else if (s_launch_confirmed_cam.has_line) {
+            s_cam = s_launch_confirmed_cam;
+        }
+        reset_line_control_history();
+        enter_state(CAR_STATE_RUN, now_ms);
+        run_line_controller_cam(now_ms);
         break;
 
     case CAR_STATE_AVOID_STOP:
@@ -794,17 +918,10 @@ void walking_update_cam(const camera_line_result_t *cam,
         }
 
         if (s_line_reacquire_samples >= AVOID_FIND_CONFIRM_SAMPLES) {
-            s_cam = *cam;
-            s_last_cam_frame_seq = cam->frame_seq;
-            s_last_error = 0.0f;
-            s_filtered_error = 0.0f;
-            s_error_filter_valid = false;
-            s_line_lost_timing = false;
             s_finish_armed = true;   /* 武装终点 T 线检测 */
             s_finish_samples = 0;
             s_avoid_run_entry_ms = now_ms;   /* 回巡线时刻（硬编码停车计时起点） */
-            enter_state(CAR_STATE_RUN, now_ms);
-            run_line_controller_cam(now_ms);
+            enter_reacquire_launch(cam, false, 0, now_ms);
             break;
         }
         if (elapsed_ms(now_ms, s_state_enter_ms) >= AVOID_FIND_LINE_MS) {
@@ -835,12 +952,7 @@ void walking_update_cam(const camera_line_result_t *cam,
         apply_brake();
         if (s_cam_new_frame && s_cam.has_line) {
             if (++s_line_reacquire_samples >= 5) {
-                s_last_error = 0.0f;
-                s_filtered_error = 0.0f;
-                s_error_filter_valid = false;
-                s_line_lost_timing = false;
-                enter_state(CAR_STATE_RUN, now_ms);
-                run_line_controller_cam(now_ms);
+                enter_reacquire_launch(&s_cam, false, 0, now_ms);
             }
         } else if (s_cam_new_frame) {
             s_line_reacquire_samples = 0;
