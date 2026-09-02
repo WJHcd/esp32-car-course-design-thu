@@ -85,8 +85,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_B_GAIN_FIND  1.45f
 
 /* ------------------------ 控制参数区 ------------------------ */
-/* 直线基准速度（2026-09-01 现场 13.5→14）；弯道前进按 14-|turn|/2 联动 */
-#define LINE_BASE_SPEED_PCT       14.0f
+/* 直线基准速度（2026-09-01 现场 16→15）；弯道前进按 15-|turn|/2 联动 */
+#define LINE_BASE_SPEED_PCT       15.0f
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -116,8 +116,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_SEARCH_SWEEP_MS    1600u
 /* 弯道前进速度（2026-09-01 现场 7→6.5） */
 #define LINE_CORNER_SPEED_PCT    6.5f
-/* 弯道转向力度（2026-09-01 恢复 10.5→11）：10.5 略欠 */
-#define LINE_CORNER_TURN_PCT     11
+/* 弯道转向力度（2026-09-01 11→10.5）：11 略强，回调 0.5 档 */
+#define LINE_CORNER_TURN_PCT   10.5f
 /*
  * 锐角弯专用找出口参数（2026-09-01 重构）：
  * - 取消 1000ms 定时反向：找线转速下 1s 转不满锐角出口所需的 ~120°，
@@ -162,8 +162,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define CORNER_EXIT_LAUNCH_SPEED_PCT  12.0f
 #define CORNER_EXIT_LAUNCH_FORWARD_MS  100u
 #define CORNER_EXIT_LAUNCH_TURN_FORWARD_PCT  8.0f
-#define CORNER_EXIT_LAUNCH_TURN_PCT     14
-#define CORNER_EXIT_LAUNCH_TURN_MS      100u
+#define CORNER_EXIT_LAUNCH_TURN_PCT     13
+#define CORNER_EXIT_LAUNCH_TURN_MS      90u
 #define REACQUIRE_TURN_REQUIRED_ERR    0.30f
 
 /* 现场标定（2026-09-01）：触发距离 15→13cm。
@@ -219,7 +219,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 超声 18cm 触发时车头距板约 18cm。
  *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
  *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
-#define AVOID_STRAFE_DIST_CM    13.0f   /* 现场标定 12→13：左移总距离 */
+#define AVOID_STRAFE_DIST_CM    14.0f   /* 现场标定 13→14：左移总距离 */
 #define AVOID_FORWARD_DIST_CM   14.0f   /* 初值：前进越过距离 */
 
 /* 由上面的距离/速度自动换算出各阶段时长（勿手改，改距离或速度即可）。 */
@@ -231,11 +231,11 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* ---- 固定时序（不依赖标定）---- */
 #define AVOID_STOP_MS            120u   /* 确认障碍后的短暂停车 */
 
-/* ---- 硬编码调试行为（2026-09-01，当前已关闭）----
- * 避障完整走完、回到巡线（AVOID_FIND_LINE 退出）满 1s 后直接刹停并进
+/* ---- 硬编码调试行为（2026-09-01，已启用）----
+ * 避障完整走完、回到巡线（AVOID_FIND_LINE 退出）满 2s 后直接刹停并进
  * FINISH_STOP（不自动恢复），用于实车观察避障后的巡线表现。
- * 置 1 启用；调试完成后删除本段与 walking_update_cam 中的对应检查。 */
-#define AVOID_HARD_STOP_ENABLED   0
+ * 置 0 关闭；调试完成后删除本段与 walking_update_cam 中的对应检查。 */
+#define AVOID_HARD_STOP_ENABLED   1
 #define AVOID_HARD_STOP_MS       1000u
 
 /* ---- 找线阶段（AVOID_FIND_LINE）----
@@ -246,9 +246,10 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define AVOID_FIND_CENTER_ERR   0.35f   /* 目标线进入画面中央后停车确认 */
 #define AVOID_FIND_CONFIRM_SAMPLES 2u   /* 首帧停车，静止确认第二帧 */
 #define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（高于 motor.c 最低有效出力） */
-/* 找线右移速度（2026-09-01 回调 9→10）：9% 偏慢，回升 1 档（10% 时
- * C 轮 9%，仍在死区边缘——自旋由 STRAFE_B_GAIN_FIND 专用增益抑制） */
-#define AVOID_FIND_STRAFE_PCT    10
+/* 找线右移速度（2026-09-01 10→11）：现场要求提速 1 档；自旋由
+ * STRAFE_B_GAIN_FIND 专用增益抑制（速度变化后如自旋方向/强度变化，
+ * 对该值做 ±0.05 微调即可） */
+#define AVOID_FIND_STRAFE_PCT    11
 #define AVOID_FORWARD_SPEED_PCT  15     /* 避障前进速度档 */
 #define AVOID_FIND_SPEED_PCT     10     /* 找线前进速度档 */
 #define AVOID_SCAN_TURN_PCT       5     /* 找线扫描转向幅度 */
@@ -306,6 +307,9 @@ static walking_command_t s_last_command;
 static bool s_search_restart_kick_active;
 static uint32_t s_search_restart_kick_start_ms;
 static bool s_corner_saw_no_line;
+/* 硬编码：赛道第一个锐角为右转（2026-09-01 现场确认），首次弯道检测
+ * 直接锁定右侧；置位后恢复正常的逐帧侧别判定 */
+static bool s_first_corner_locked;
 static bool s_launch_turn_required;
 static int s_launch_turn_side;
 /* 把摄像头结果包装成巡线控制器需要的上下文。 */
@@ -600,6 +604,7 @@ void walking_reset(uint32_t now_ms)
     s_line_side_accum = 0;
     s_corner_turn_side = +1;
     s_corner_saw_no_line = false;
+    s_first_corner_locked = false;
     s_search_restart_kick_active = false;
     s_search_restart_kick_start_ms = now_ms;
     s_launch_turn_required = false;
@@ -1057,7 +1062,14 @@ static void run_line_controller_cam(uint32_t now_ms)
 
     /* 大误差=接近弯道边缘：锁定方向并减速大转向 */
     if (cam_is_sharp_corner()) {
-        s_last_line_side = (error < 0.0f) ? -1 : +1;
+        /* 硬编码（2026-09-01 现场确认）：赛道第一个锐角为【右】转，首次
+         * 进入弯道检测直接锁定右侧，防侧别误锁原地反绕。 */
+        if (!s_first_corner_locked) {
+            s_first_corner_locked = true;
+            s_last_line_side = +1;
+        } else {
+            s_last_line_side = (error < 0.0f) ? -1 : +1;
+        }
         s_line_side_accum = s_last_line_side * LINE_SIDE_FLIP_MIN;
         s_last_line_was_corner = true;
 
