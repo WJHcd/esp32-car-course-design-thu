@@ -75,6 +75,14 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_SIGN_R       (-1)    /* C：左前轮 */
 #define STRAFE_SIGN_B       (-1)    /* B：正后轮（符号约定与 A/C 相反！） */
 #define STRAFE_B_GAIN       1.80f
+/* 找线右移专用平移增益（2026-09-01 新增）：死区非线性使平衡所需的后轮
+ * 增益随指令大小变化——低速右移时前轮被死区压缩更多、B 相对偏快，
+ * 按左移 12% 标定的全局 STRAFE_B_GAIN 不适用。本值只在 AVOID_FIND_LINE
+ * 状态生效（enter_state 每次切换状态恢复全局值），左移段不受影响。
+ * 实车数据点：右移 10% 时 G=1.80 与 1.75、9% 时 G=1.65 均逆时针自旋
+ * → 方向为减小；2026-09-01 下调至 1.45（若转成顺时针，+0.05 回调）。
+ * 调参（着地观察右移脉冲）：仍逆时针自旋 → 每次 -0.05；反向 → +0.05。 */
+#define STRAFE_B_GAIN_FIND  1.45f
 
 /* ------------------------ 控制参数区 ------------------------ */
 /* 直线基准速度（2026-09-01 现场 13.5→14）；弯道前进按 14-|turn|/2 联动 */
@@ -82,7 +90,7 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
-#define LINE_KD                    0.5f  /* 少量微分阻尼，抑制直线来回扭动 */
+#define LINE_KD                    0.8f  /* 微分阻尼（2026-09-01 0.5→0.8），抑制直线来回扭动 */
 #define LINE_TURN_SLEW_PCT         3  /* 每个 20ms 控制周期最大转向变化量 */
 #define LINE_ERROR_FILTER_ALPHA  0.30f /* 摄像头误差的低通系数，越小越稳但越慢 */
 /* 摄像头误差范围是 [-1,+1]；沿用红外的 0.45 死区会几乎不修正。 */
@@ -98,9 +106,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* 5000ms：换向周期 1.6s 下两相位（先猜错再扫回）也能覆盖锐角出口
  * 所需的 ~120° 单侧摆幅，另留静止确认的余量。 */
 #define LINE_SEARCH_TIMEOUT_MS  5000u
-/* 找线转速（2026-09-01 8%→10%）：找线改为首帧见线即停车、静止确认，
- * 不再依赖低速让线在带内停留 2 帧；提速直接缩短锐角 ~120° 的找线时间。 */
-#define LINE_SEARCH_TURN_PCT      10
+/* 找线转速（2026-09-01 10%→12%）：实车反馈转弯力度不足；且 12% 使后轮
+ * B 分量达 8.2%、脱离死区开始真正出力，旋转显著加快。 */
+#define LINE_SEARCH_TURN_PCT      12
 /* 找线扫描换向周期（A3 修复）：在"上次见线侧"与反方向之间交替，
  * 避免方向猜错时一直朝错误方向空转。
  * 1600ms：10% 转速下单相位约覆盖 130°+，锐角出口（相对丢线航向
@@ -108,7 +116,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define LINE_SEARCH_SWEEP_MS    1600u
 /* 弯道前进速度（2026-09-01 现场 7→6.5） */
 #define LINE_CORNER_SPEED_PCT    6.5f
-#define LINE_CORNER_TURN_PCT      9
+/* 弯道转向力度（2026-09-01 恢复 10.5→11）：10.5 略欠 */
+#define LINE_CORNER_TURN_PCT     11
 /*
  * 锐角弯专用找出口参数（2026-09-01 重构）：
  * - 取消 1000ms 定时反向：找线转速下 1s 转不满锐角出口所需的 ~120°，
@@ -127,17 +136,23 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 要求车头见线，背对线时无法自恢复，等于本轮尝试结束。 */
 #define LINE_CORNER_TIMEOUT_MS         5000u
 
+/* FAILSAFE 自动重启（2026-09-01）：故障停车不再是终点——刹停满此时长
+ * 仍未被动恢复（5 稳定帧见线），就重新进入 LINE_SEARCH 主动找线。
+ * 覆盖巡线找线/弯道找出口/避障找线的全部超时路径，比赛里不再出现
+ * 永久停死；真正的终点 FINISH_STOP 不受影响。 */
+#define FAILSAFE_RESTART_MS      2000u
+
 /*
  * 弯道出口起步助推（2026-09-01）：CORNER_SEARCH 停车确认出口后直接回
  * RUN，此时弯道混控(F=6.5,T=±9)给出 A≈2.5%、B≈6.1%、C≈15.5% 的不对称
  * 低速输出，A/B 低于死区无法从静止克服摩擦，车停在出口处需要人工轻推。
  * 新增 CORNER_EXIT_LAUNCH 状态：确认出口后先执行 ~140ms 纯前进助推
- * （A/C 前轮对称获得约 11% 的可靠启动输出，B 轮不动、不引入额外横摆），
+ * （A/C 前轮对称获得约 12% 的可靠启动输出，B 轮不动、不引入额外横摆），
  * 结束后再清一次控制历史并进入 RUN。
- * 调参：仍无法启动 → 先把时长增至 160~180ms，再考虑提速至 12%；
- *       冲得太远   → 时长降至 100~120ms。
+ * 调参记录：2026-09-01 现场 11%→12%（实车反馈主推力度不足）。
+ * 仍无法启动 → 先把时长增至 160~180ms；冲得太远 → 时长降至 100~120ms。
  */
-#define CORNER_EXIT_LAUNCH_SPEED_PCT  11.0f
+#define CORNER_EXIT_LAUNCH_SPEED_PCT  12.0f
 #define CORNER_EXIT_LAUNCH_MS          140u
 
 /* 现场标定（2026-09-01）：触发距离 15→13cm。
@@ -205,6 +220,13 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* ---- 固定时序（不依赖标定）---- */
 #define AVOID_STOP_MS            120u   /* 确认障碍后的短暂停车 */
 
+/* ---- 硬编码调试行为（2026-09-01，当前已关闭）----
+ * 避障完整走完、回到巡线（AVOID_FIND_LINE 退出）满 1s 后直接刹停并进
+ * FINISH_STOP（不自动恢复），用于实车观察避障后的巡线表现。
+ * 置 1 启用；调试完成后删除本段与 walking_update_cam 中的对应检查。 */
+#define AVOID_HARD_STOP_ENABLED   0
+#define AVOID_HARD_STOP_MS       1000u
+
 /* ---- 找线阶段（AVOID_FIND_LINE）----
  * 绕过木板后低速前进+小幅扫描找回黑线；见线即恢复 RUN。
  * [标定#17] 扫描偏置方向：初值 +1（左偏扫）；若试跑发现扫向错误一侧
@@ -213,13 +235,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define AVOID_FIND_CENTER_ERR   0.35f   /* 目标线进入画面中央后停车确认 */
 #define AVOID_FIND_CONFIRM_SAMPLES 2u   /* 首帧停车，静止确认第二帧 */
 #define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（高于 motor.c 最低有效出力） */
-/* 找线右移速度（2026-09-01）：曾降到 10% 想给摄像头留确认时间，但
- * A/C 前轮指令随之落到 9~10%，进入电机死区压缩段出力不足，后轮 B
- * （约 18%）相对偏快，右移时产生逆时针自旋。12% 是 MODE=5 标定过
- * "三轮均能正常出力"的平移档，恢复之。若 12% 下摄像头确实跟不上，
- * 优先调 camera_line.h 的稳定帧要求（CAM_STABLE_SAMPLES/CAM_SETTLE_MS），
- * 不要再降平移速度——死区会让三轮失配、自旋复发。 */
-#define AVOID_FIND_STRAFE_PCT    12
+/* 找线右移速度（2026-09-01 回调 9→10）：9% 偏慢，回升 1 档（10% 时
+ * C 轮 9%，仍在死区边缘——自旋由 STRAFE_B_GAIN_FIND 专用增益抑制） */
+#define AVOID_FIND_STRAFE_PCT    10
 #define AVOID_FORWARD_SPEED_PCT  15     /* 避障前进速度档 */
 #define AVOID_FIND_SPEED_PCT     10     /* 找线前进速度档 */
 #define AVOID_SCAN_TURN_PCT       5     /* 找线扫描转向幅度 */
@@ -256,6 +274,9 @@ static bool s_finish_armed;
 static uint8_t s_finish_samples;
 static uint32_t s_last_cam_frame_seq;
 static uint32_t s_avoid_find_line_start_seq;
+/* 避障完成回到巡线的时刻（AVOID_FIND_LINE 退出），供 AVOID_HARD_STOP_MS
+ * 硬编码停车计时 */
+static uint32_t s_avoid_run_entry_ms;
 static bool s_cam_new_frame;
 /* 原始新帧（A2 修复）：不要求 stable，仅用于找线/弯道恢复计数。
  * 旋转找线时凑不满"连续 3 帧一致"的稳定条件，若恢复也要求 stable
@@ -270,6 +291,9 @@ static int s_corner_turn_side;
 static float s_filtered_error;
 static bool s_error_filter_valid;
 static walking_command_t s_last_command;
+/* 当前生效的平移后轮增益：全局 STRAFE_B_GAIN，仅找线状态临时替换为
+ * STRAFE_B_GAIN_FIND（进入新状态时由 enter_state 恢复全局值） */
+static float s_strafe_b_gain = STRAFE_B_GAIN;
 
 static int clamp_int(int value, int low, int high)
 {
@@ -295,6 +319,7 @@ static void enter_state(car_state_t state, uint32_t now_ms)
     s_state = state;
     s_state_enter_ms = now_ms;
     s_line_reacquire_samples = 0;
+    s_strafe_b_gain = STRAFE_B_GAIN;   /* 切换状态恢复全局平移增益 */
 }
 
 /*
@@ -316,7 +341,7 @@ static void apply_body_command(float forward, float turn, float strafe)
     wheel[WHEEL_TO_MOTOR_L] = FORWARD_SIGN_L * forward + TURN_SIGN_L * turn + STRAFE_SIGN_L * strafe;
     wheel[WHEEL_TO_MOTOR_R] = FORWARD_SIGN_R * forward + TURN_SIGN_R * turn + STRAFE_SIGN_R * strafe;
     wheel[WHEEL_TO_MOTOR_B] = TURN_SIGN_B * turn * TURN_B_GAIN
-                            + STRAFE_SIGN_B * strafe * STRAFE_B_GAIN;
+                            + STRAFE_SIGN_B * strafe * s_strafe_b_gain;
 
     float max_abs = 100.0f;
     for (int i = 0; i < MOTOR_NUM; i++) {
@@ -503,6 +528,7 @@ void walking_reset(uint32_t now_ms)
     s_last_cam_frame_seq = 0;
     s_last_cam_raw_frame_seq = 0;
     s_avoid_find_line_start_seq = 0;
+    s_avoid_run_entry_ms = now_ms;
     s_cam_new_frame = false;
     s_cam_new_raw_frame = false;
     s_cam = (camera_line_result_t){0};
@@ -553,6 +579,15 @@ void walking_update_cam(const camera_line_result_t *cam,
         s_obstacle_samples = 0;
         enter_state(CAR_STATE_AVOID_STOP, now_ms);
     }
+
+#if AVOID_HARD_STOP_ENABLED
+    /* 硬编码调试行为：避障回到巡线满 1s 直接刹停（见 AVOID_HARD_STOP_MS 说明） */
+    if (s_state == CAR_STATE_RUN && s_finish_armed &&
+        elapsed_ms(now_ms, s_avoid_run_entry_ms) >= AVOID_HARD_STOP_MS) {
+        enter_state(CAR_STATE_FINISH_STOP, now_ms);
+        apply_brake();
+    }
+#endif
 
     switch (s_state) {
     case CAR_STATE_RUN:
@@ -767,6 +802,7 @@ void walking_update_cam(const camera_line_result_t *cam,
             s_line_lost_timing = false;
             s_finish_armed = true;   /* 武装终点 T 线检测 */
             s_finish_samples = 0;
+            s_avoid_run_entry_ms = now_ms;   /* 回巡线时刻（硬编码停车计时起点） */
             enter_state(CAR_STATE_RUN, now_ms);
             run_line_controller_cam(now_ms);
             break;
@@ -779,7 +815,9 @@ void walking_update_cam(const camera_line_result_t *cam,
         if (s_line_reacquire_samples > 0u) {
             apply_brake();  /* 首帧进入中央范围，静止等第二帧确认 */
         } else {
-            /* strafe<0 = 向右平移（降速会触发死区失配自旋，见宏说明） */
+            /* strafe<0 = 向右平移；套用找线专用后轮增益，抵消低速下
+             * 前轮死区压缩带来的失配自旋（调参见 STRAFE_B_GAIN_FIND）。 */
+            s_strafe_b_gain = STRAFE_B_GAIN_FIND;
             apply_body_command(0, 0, -AVOID_FIND_STRAFE_PCT);
         }
         break;
@@ -806,6 +844,16 @@ void walking_update_cam(const camera_line_result_t *cam,
             }
         } else if (s_cam_new_frame) {
             s_line_reacquire_samples = 0;
+        }
+
+        /*
+         * 自动重启（FAILSAFE_RESTART_MS）：刹停静置满时长仍未恢复，
+         * 重新主动找线——车头背对线时被动恢复永远凑不齐，主动扫描
+         * 是唯一出路。找到线后经 LINE_SEARCH 的确认流程回 RUN。
+         */
+        if (elapsed_ms(now_ms, s_state_enter_ms) >= FAILSAFE_RESTART_MS) {
+            s_line_lost_timing = false;
+            enter_state(CAR_STATE_LINE_SEARCH, now_ms);
         }
         break;
     }
