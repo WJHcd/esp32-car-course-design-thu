@@ -1,4 +1,5 @@
 #include "camera_line.h"
+#include "ball_detect.h"
 #include <string.h>
 #include <inttypes.h>
 #include "esp_log.h"
@@ -46,9 +47,11 @@ typedef struct {
 
 static QueueHandle_t s_frame_queue;
 static camera_line_result_t s_result;
+static ball_field_result_t s_ball_field;   /* 找球任务三色识别结果（每帧覆盖） */
 static volatile bool s_streaming;          /* 已成功解码出帧 */
 static volatile bool s_connected;          /* UVC 流已打开 */
 static camera_line_frame_cb_t s_frame_cb;  /* 帧回调（串口/TFT 预览等） */
+static uint32_t s_frame_cb_fire_count;     /* 诊断：回调触发次数 */
 static volatile bool s_stats_log_enabled = true;
 
 /* ---------- 稳定性判定状态 ---------- */
@@ -342,6 +345,38 @@ static void detect_line_centroid(const uint8_t *rgb, int w, int h, camera_line_r
     out->has_line = true;
 }
 
+/* 在 RGB 帧上画 2px 方框（识别结果叠加，随帧送到 TFT 显示） */
+static void draw_blob_box(uint8_t *rgb, int w, int h,
+                          const ball_blob_t *b,
+                          uint8_t cr, uint8_t cg, uint8_t cb)
+{
+    if (!b->detected) return;
+    int x0 = (int)b->x_min_px - 2, y0 = (int)b->y_min_px - 2;
+    int x1 = x0 + (int)b->width_px + 3, y1 = y0 + (int)b->height_px + 3;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= w) x1 = w - 1;
+    if (y1 >= h) y1 = h - 1;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    for (int x = x0; x <= x1; x++) {
+        for (int k = 0; k < 2; k++) {
+            uint8_t *pa = rgb + (size_t)(y0 + k) * w * 3 + (size_t)x * 3;
+            pa[0] = cr; pa[1] = cg; pa[2] = cb;
+            uint8_t *pb = rgb + (size_t)(y1 - k) * w * 3 + (size_t)x * 3;
+            pb[0] = cr; pb[1] = cg; pb[2] = cb;
+        }
+    }
+    for (int y = y0; y <= y1; y++) {
+        for (int k = 0; k < 2; k++) {
+            uint8_t *pa = rgb + (size_t)y * w * 3 + (size_t)(x0 + k) * 3;
+            pa[0] = cr; pa[1] = cg; pa[2] = cb;
+            uint8_t *pb = rgb + (size_t)y * w * 3 + (size_t)(x1 - k) * 3;
+            pb[0] = cr; pb[1] = cg; pb[2] = cb;
+        }
+    }
+}
+
 /* ============================================================
  * 图像处理任务：MJPEG 解码 → 黑线检测
  * ============================================================ */
@@ -413,12 +448,37 @@ static void processing_task(void *args)
         }
 #endif
 
-        /* 帧回调：把 RGB888 帧转发给外部（串口 ASCII 预览等） */
-        if (s_frame_cb) {
-            s_frame_cb(rgb_buf, jpeg_out.width, jpeg_out.height);
+        detect_line_centroid(rgb_buf, jpeg_out.width, jpeg_out.height, &s_result);
+
+        /* 找球任务目标识别（黑球/蓝球/红角标），结果供 ball_task 读取。
+         * 成本 ~1ms/帧，始终运行；巡线阶段上层不读即可。 */
+        static int ball_w = -1, ball_h = -1;
+        if (ball_w != (int)jpeg_out.width || ball_h != (int)jpeg_out.height) {
+            ball_w = (int)jpeg_out.width;
+            ball_h = (int)jpeg_out.height;
+            ball_detect_init(ball_w, ball_h);
+            ESP_LOGI(TAG, "ball_detect 初始化 %dx%d", ball_w, ball_h);
+        }
+        ball_detect_process_rgb888(rgb_buf, &s_ball_field);
+
+        /* 识别结果叠加方框：黑球白框 / 蓝球绿框 / 红角标紫框 */
+        draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
+                      &s_ball_field.black_ball, 255, 255, 255);
+        draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
+                      &s_ball_field.blue_ball, 0, 255, 0);
+        for (int i = 0; i < s_ball_field.red_marker_count; i++) {
+            draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
+                          &s_ball_field.red_marker[i], 255, 0, 255);
         }
 
-        detect_line_centroid(rgb_buf, jpeg_out.width, jpeg_out.height, &s_result);
+        /* 帧回调挪到识别与叠加之后：TFT 显示的是带识别框的画面 */
+        if (s_frame_cb) {
+            s_frame_cb_fire_count++;
+            if (s_frame_cb_fire_count == 1) {
+                ESP_LOGI(TAG, "帧回调首次触发（画面开始送往回调）");
+            }
+            s_frame_cb(rgb_buf, jpeg_out.width, jpeg_out.height);
+        }
 
         /*
          * 稳定性判定：has_line 连续 CAM_STABLE_SAMPLES 帧一致才更新
@@ -597,6 +657,19 @@ void camera_line_get(camera_line_result_t *out)
         return;
     }
     *out = s_result;
+}
+
+void camera_line_get_ball(ball_field_result_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    *out = s_ball_field;
+}
+
+uint32_t camera_line_frame_cb_count(void)
+{
+    return s_frame_cb_fire_count;
 }
 
 bool camera_line_ready(void)

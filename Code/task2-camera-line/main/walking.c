@@ -1,6 +1,8 @@
 #include "walking.h"
 #include "motor.h"
 #include "ultrasonic.h"
+#include "ball_task.h"
+#include "camera_line.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -266,6 +268,7 @@ static const char *const s_state_name[] = {
     "AVOID_FIND_LINE",
     "FINISH_STOP",
     "FAILSAFE_STOP",
+    "BALL_TASK",
 };
 
 static car_state_t s_state;
@@ -462,6 +465,12 @@ void walking_test_drive(int forward, int turn, int strafe)
     apply_body_command(forward, turn, strafe);
 }
 
+/* 供 ball_task 模块下发三轴混控指令（走正常混控与输出使能）。 */
+void walking_direct_command(float forward, float turn, float strafe)
+{
+    apply_body_command(forward, turn, strafe);
+}
+
 /* 避免数字红外从中心跳到外侧时，转向指令在一个控制周期内突变。 */
 static int limit_line_turn_slew(int requested_turn)
 {
@@ -618,6 +627,7 @@ void walking_reset(uint32_t now_ms)
     s_last_cam_raw_frame_seq = 0;
     s_avoid_find_line_start_seq = 0;
     s_avoid_run_entry_ms = now_ms;
+    ball_task_reset(now_ms);
     s_cam_new_frame = false;
     s_cam_new_raw_frame = false;
     s_cam = (camera_line_result_t){0};
@@ -670,10 +680,12 @@ void walking_update_cam(const camera_line_result_t *cam,
     }
 
 #if AVOID_HARD_STOP_ENABLED
-    /* 硬编码调试行为：避障回到巡线满 1s 直接刹停（见 AVOID_HARD_STOP_MS 说明） */
+    /* 硬编码衔接点：避障回到巡线满 1s 停下，随后开始找球/推球任务
+     * （见 AVOID_HARD_STOP_MS 与 ball_task 模块说明）。 */
     if (s_state == CAR_STATE_RUN && s_finish_armed &&
         elapsed_ms(now_ms, s_avoid_run_entry_ms) >= AVOID_HARD_STOP_MS) {
-        enter_state(CAR_STATE_FINISH_STOP, now_ms);
+        ball_task_start(now_ms);
+        enter_state(CAR_STATE_BALL_TASK, now_ms);
         apply_brake();
     }
 #endif
@@ -948,9 +960,26 @@ void walking_update_cam(const camera_line_result_t *cam,
         /*
          * 到达赛道末尾 T 线：永久刹车，任务结束。
          * 与 FAILSAFE_STOP 不同，本状态不自动恢复——终点停车是预期行为。
+         * （找球任务完成后也进本状态收尾。）
          */
         apply_brake();
         break;
+
+    case CAR_STATE_BALL_TASK: {
+        /*
+         * 找球/推球任务（接在避障→巡线→1s 停车之后）：由 ball_task
+         * 状态机接管电机（经 walking_direct_command 走正常三轴混控）。
+         * 双球推送完成或全任务超时后收尾进 FINISH_STOP。
+         */
+        ball_field_result_t balls;
+        camera_line_get_ball(&balls);
+        ball_task_update(cam, &balls, now_ms);
+        if (ball_task_is_done()) {
+            enter_state(CAR_STATE_FINISH_STOP, now_ms);
+            apply_brake();
+        }
+        break;
+    }
 
     case CAR_STATE_FAILSAFE_STOP:
     default:

@@ -17,6 +17,8 @@ typedef enum {
     CAR_STATE_AVOID_FIND_LINE,
     CAR_STATE_FINISH_STOP,
     CAR_STATE_FAILSAFE_STOP,
+    /* 找球/推球任务（避障→巡线→1s 停车后进入，见 ball_task 模块） */
+    CAR_STATE_BALL_TASK,
 } car_state_t;
 
 typedef struct {
@@ -59,3 +61,9 @@ bool walking_is_finished(void);
  * 用于架空轮子确认平移/前进方向。输出是否生效由 output_enabled 决定。
  */
 void walking_test_drive(int forward_percent, int turn_percent, int strafe_percent);
+
+/**
+ * 供找球任务模块（ball_task.c）下发三轴混控指令：
+ * 走正常混控与输出使能路径，参数与 apply_body_command 相同。
+ */
+void walking_direct_command(float forward, float turn, float strafe);

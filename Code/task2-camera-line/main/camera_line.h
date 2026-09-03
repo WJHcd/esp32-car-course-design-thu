@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "ball_detect.h"
 
 /* ============================================================
  * 摄像头黑线巡线接口（任务二核心，替代任务一的红外巡线）
@@ -84,6 +85,15 @@ bool camera_line_init(void);
  * @param out 输出结果；摄像头未就绪时 has_line=false
  */
 void camera_line_get(camera_line_result_t *out);
+
+/**
+ * @brief 获取最近一帧的找球任务三色识别结果（黑球/蓝球/红角标）
+ * @param out 输出结果；每帧覆盖，摄像头未就绪时全零
+ */
+void camera_line_get_ball(ball_field_result_t *out);
+
+/** @brief 诊断：帧回调累计触发次数 */
+uint32_t camera_line_frame_cb_count(void);
 
 /**
  * @brief 摄像头是否已开始出帧

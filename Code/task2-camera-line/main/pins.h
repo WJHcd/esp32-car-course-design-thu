@@ -46,3 +46,8 @@
 #define TFT_SCLK_GPIO   GPIO_NUM_13
 #define TFT_MOSI_GPIO   GPIO_NUM_15  /* TFT SDI */
 #define TFT_DC_GPIO     GPIO_NUM_17
+
+/* ---- 云台俯仰舵机（MG90S，50Hz PWM） ----
+ * GPIO18 为空闲脚（22~25 编号空洞，21 未占用）。舵机需独立 5V 供电，
+ * 与 ESP32 共地；信号线接 GPIO18。 */
+#define SERVO_TILT_GPIO  GPIO_NUM_18

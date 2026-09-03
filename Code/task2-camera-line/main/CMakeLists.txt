@@ -8,7 +8,7 @@
 #   tft_st7735.c  —— TFT 显示（转速 + 距离）
 idf_component_register(
     SRCS "ascii_preview.c" "camera_follow_test.c" "main.c" "camera_line.c" "ultrasonic.c" "walking.c" "motor.c"
-         "encoder.c" "tft_st7735.c"
+         "encoder.c" "tft_st7735.c" "gimbal.c" "ball_detect.c" "ball_task.c"
          "test_ultrasonic.c"
     INCLUDE_DIRS "."
     REQUIRES esp_driver_ledc esp_driver_gpio esp_driver_pcnt esp_driver_spi

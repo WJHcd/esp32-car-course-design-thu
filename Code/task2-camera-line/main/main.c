@@ -10,6 +10,8 @@
 #include "camera_follow_test.h"
 #include "encoder.h"
 #include "tft_st7735.h"
+#include "gimbal.h"
+#include "ball_task.h"
 #include "test.h"
 
 /* ============================================================
@@ -30,8 +32,9 @@
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  *   7 = 摄像头纯巡线实车测试（无超声/避障；含弯道丢线原地恢复）
+ *   8 = 找球/推球任务独立测试（跳过巡线避障，直接进推球状态机）
  * ============================================================ */
-#define TASK2_MODE  0
+#define TASK2_MODE  8
 
 static const char *TAG = "task2";
 
@@ -198,12 +201,94 @@ static void app_camera_ascii_preview(void)
 }
 
 /*
+ * 找球/推球任务独立测试（TASK2_MODE 8）：跳过巡线与避障，
+ * 上电等摄像头就绪后直接开始"抬云台→扫视→推球"，用于单独联调。
+ */
+void app_ball_task_test(void)
+{
+    gimbal_init();
+    walking_init();
+    walking_set_output_enabled(true);
+    tft_st7735_init();
+    /* 注意：不要 start_telemetry——遥测任务会用五行信息覆盖摄像头画面 */
+    if (!camera_line_init()) {
+        ESP_LOGE(TAG, "摄像头初始化任务创建失败；电机保持禁用");
+        return;
+    }
+
+    printf("\n========== 找球/推球任务独立测试（MODE 8） ==========\n");
+    printf("等待摄像头出帧后直接开始找球任务。\n");
+    printf("摄像头画面同步显示在小车 TFT 屏上（约 3fps）。\n\n");
+
+    /* 摄像头画面实时上屏：直观看摄像头视野里有什么 */
+    camera_line_set_frame_cb(tft_st7735_show_camera_frame);
+
+    /* 等摄像头出帧 */
+    while (!camera_line_ready()) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    ball_task_start(now_ms);
+
+    uint32_t last_print = 0;
+    uint32_t last_ascii_ms = 0;
+    while (true) {
+        camera_line_result_t cam;
+        camera_line_get(&cam);
+        ball_field_result_t balls;
+        camera_line_get_ball(&balls);
+        /* TFT 正在显示摄像头画面，不再刷巡线状态（避免互相覆盖） */
+
+        const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        ball_task_update(&cam, &balls, now_ms);
+
+        if (ball_task_is_done()) {
+            walking_direct_command(0, 0, 0);
+            printf("[ball] 任务结束。\n");
+            break;
+        }
+
+        if (now_ms - last_print >= 500) {
+            last_print = now_ms;
+            printf("[ball] cb=%lu state=%s 黑(%d x=%+.2f a=%.3f) "
+                   "蓝(%d x=%+.2f a=%.3f) 红角标%d\n",
+                   (unsigned long)camera_line_frame_cb_count(),
+                   ball_task_state_name(),
+                   balls.black_ball.detected, balls.black_ball.x_ratio,
+                   balls.black_ball.area_ratio,
+                   balls.blue_ball.detected, balls.blue_ball.x_ratio,
+                   balls.blue_ball.area_ratio,
+                   balls.red_marker_count);
+        }
+        if (now_ms - last_ascii_ms >= 1000) {
+            last_ascii_ms = now_ms;
+            int gmn, gmx, gavg;
+            uint32_t bp, up, rp;
+            ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &bp, &up, &rp);
+            printf("[gray] min=%d max=%d avg=%d 黑px=%lu 蓝px=%lu 红px=%lu\n",
+                   gmn, gmx, gavg, (unsigned long)bp, (unsigned long)up,
+                   (unsigned long)rp);
+            char view[1400];
+            ball_detect_debug_ascii(view, (int)sizeof(view));
+            printf("[view]\n%s", view);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    walking_direct_command(0, 0, 0);
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+/*
  * 综合模式：摄像头巡线 + 超声波避障，20ms 控制周期。
  * 巡线误差来自 camera_line（黑线质心，[-1,+1]），
  * walking.c 的 PD 增益通过 CAM_ERR_SCALE 适配该量纲。
  */
 void app_integrated(void)
 {
+    gimbal_init();
     ultrasonic_init();
     walking_init();
     encoder_init();
@@ -215,7 +300,7 @@ void app_integrated(void)
     }
 
     printf("\n========== 任务二综合模式：摄像头巡线 + 超声波避障 ==========\n");
-    printf("等待摄像头稳定见线后才使能电机，避免开机枚举期间自主找线。\n\n");
+    printf("避障完成回巡线 1s 后自动进入找球/推球任务。\n\n");
 
     while (true) {
         camera_line_result_t cam;
@@ -241,7 +326,7 @@ void app_integrated(void)
         /* 摄像头巡线：取最近一帧的黑线误差 */
         camera_line_result_t cam;
         camera_line_get(&cam);
-        tft_st7735_set_line(cam.has_line, cam.error, cam.stable);
+        /* TFT 正在显示摄像头画面，不再刷巡线状态（避免互相覆盖） */
 
         /* 每 5 拍（100ms）测一次超声 */
         uint16_t distance_sample = ULTRASONIC_INVALID;
@@ -295,6 +380,8 @@ void app_main(void)
     app_camera_ascii_preview();
 #elif TASK2_MODE == 7
     app_camera_follow_test();
+#elif TASK2_MODE == 8
+    app_ball_task_test();
 #else
     app_integrated();
 #endif
