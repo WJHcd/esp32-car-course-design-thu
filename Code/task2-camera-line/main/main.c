@@ -32,10 +32,10 @@
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  *   7 = 摄像头纯巡线实车测试（无超声/避障；含弯道丢线原地恢复）
- *   8 = 找球/推球任务独立测试（跳过巡线避障，直接进推球状态机）
- *   9 = 黑球/蓝球纯识别测试（不初始化电机，只显示完整画面与识别框）
+ *   8 = 找球/推球任务独立测试（等球→靠近→三点一线对准→撞球→退回）
+ *   9 = 红球/蓝球纯识别测试（不初始化电机，只显示完整画面与识别框）
  * ============================================================ */
-#define TASK2_MODE  9
+#define TASK2_MODE  8
 
 static const char *TAG = "task2";
 
@@ -162,7 +162,8 @@ static void app_camera_preview(void)
 
 /*
  * 球体纯识别模式：不初始化 walking/encoder/ultrasonic，确保电机不会动作。
- * TFT 等比例显示完整摄像头画面：黑球黄框、蓝球绿框、红角标紫框。
+ * TFT 等比例显示完整摄像头画面：红球黄框（原黑球角色，2026-09-03 改实物）、
+ * 蓝球绿框、绿角标紫框（显示色；紫框与蓝球的绿框区分）。
  * 串口同时输出 detected/位置/面积和颜色掩膜，便于现场标定阈值。
  */
 static void app_ball_detect_test(void)
@@ -179,8 +180,8 @@ static void app_ball_detect_test(void)
     camera_line_set_stats_log(false);
     camera_line_set_frame_cb(tft_st7735_show_camera_frame);
 
-    printf("\n========== 黑球/蓝球纯识别测试（MODE 9） ==========\n");
-    printf("电机未初始化，不会移动。TFT：黑球黄框、蓝球绿框、红角标紫框。\n");
+    printf("\n========== 红球/蓝球纯识别测试（MODE 9） ==========\n");
+    printf("电机未初始化，不会移动。TFT：红球黄框、蓝球绿框、绿角标紫框。\n");
     printf("画面采用完整等比例缩放，左右边缘目标不会被裁掉。\n\n");
 
     uint32_t last_frame_seq = UINT32_MAX;
@@ -193,35 +194,35 @@ static void app_ball_detect_test(void)
 
         if (cam.frame_seq != last_frame_seq) {
             last_frame_seq = cam.frame_seq;
-            printf("[detect] frame=%lu 黑(%d x=%.2f y=%.2f %ux%u cells=%lu) "
-                   "蓝(%d x=%.2f y=%.2f %ux%u cells=%lu) 红=%u\n",
+            printf("[detect] frame=%lu 红(%d x=%.2f y=%.2f %ux%u cells=%lu) "
+                   "蓝(%d x=%.2f y=%.2f %ux%u cells=%lu) 角标=%u\n",
                    (unsigned long)cam.frame_seq,
-                   balls.black_ball.detected,
-                   (double)balls.black_ball.x_ratio,
-                   (double)balls.black_ball.y_ratio,
-                   balls.black_ball.width_px, balls.black_ball.height_px,
-                   (unsigned long)balls.black_ball.cell_count,
+                   balls.red_ball.detected,
+                   (double)balls.red_ball.x_ratio,
+                   (double)balls.red_ball.y_ratio,
+                   balls.red_ball.width_px, balls.red_ball.height_px,
+                   (unsigned long)balls.red_ball.cell_count,
                    balls.blue_ball.detected,
                    (double)balls.blue_ball.x_ratio,
                    (double)balls.blue_ball.y_ratio,
                    balls.blue_ball.width_px, balls.blue_ball.height_px,
                    (unsigned long)balls.blue_ball.cell_count,
-                   balls.red_marker_count);
+                   balls.marker_count);
         }
 
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         if (now_ms - last_ascii_ms >= 1000u) {
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
-            uint32_t black_px, blue_px, red_px;
+            uint32_t red_px, blue_px, green_px;
             ball_detect_get_gray_diag(&gmn, &gmx, &gavg,
-                                      &black_px, &blue_px, &red_px);
-            printf("[color] gray=%d..%d avg=%d 黑px=%lu 蓝px=%lu 红px=%lu\n",
-                   gmn, gmx, gavg, (unsigned long)black_px,
-                   (unsigned long)blue_px, (unsigned long)red_px);
+                                      &red_px, &blue_px, &green_px);
+            printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
+                   gmn, gmx, gavg, (unsigned long)red_px,
+                   (unsigned long)blue_px, (unsigned long)green_px);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
-            printf("[mask] B=黑 L=蓝 R=红\n%s", view);
+            printf("[mask] R=红球 L=蓝球 G=角标 .=空白\n%s", view);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -286,8 +287,9 @@ void app_ball_task_test(void)
         return;
     }
 
-    printf("\n========== 找球/推球任务独立测试（MODE 8） ==========\n");
-    printf("等待摄像头出帧后直接开始找球任务。\n");
+    printf("\n========== 找球/推球任务独立测试（MODE 8，三点一线法） ==========\n");
+    printf("云台抬起后固定。SURVEY 静止等球 2s，没等到就缓慢前进找球 →\n");
+    printf("APPROACH 靠近到球占画面底部 → ALIGN 横移/踢转对准 → 撞球 → 退回。\n");
     printf("摄像头画面同步显示在小车 TFT 屏上（约 3fps）。\n\n");
 
     /* 摄像头画面实时上屏：直观看摄像头视野里有什么 */
@@ -321,24 +323,24 @@ void app_ball_task_test(void)
 
         if (now_ms - last_print >= 500) {
             last_print = now_ms;
-            printf("[ball] cb=%lu state=%s 黑(%d x=%+.2f a=%.3f) "
-                   "蓝(%d x=%+.2f a=%.3f) 红角标%d\n",
+            printf("[ball] cb=%lu state=%s 红(%d x=%+.2f a=%.3f) "
+                   "蓝(%d x=%+.2f a=%.3f) 角标%d\n",
                    (unsigned long)camera_line_frame_cb_count(),
                    ball_task_state_name(),
-                   balls.black_ball.detected, balls.black_ball.x_ratio,
-                   balls.black_ball.area_ratio,
+                   balls.red_ball.detected, balls.red_ball.x_ratio,
+                   balls.red_ball.area_ratio,
                    balls.blue_ball.detected, balls.blue_ball.x_ratio,
                    balls.blue_ball.area_ratio,
-                   balls.red_marker_count);
+                   balls.marker_count);
         }
         if (now_ms - last_ascii_ms >= 1000) {
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
-            uint32_t bp, up, rp;
-            ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &bp, &up, &rp);
-            printf("[gray] min=%d max=%d avg=%d 黑px=%lu 蓝px=%lu 红px=%lu\n",
-                   gmn, gmx, gavg, (unsigned long)bp, (unsigned long)up,
-                   (unsigned long)rp);
+            uint32_t rp, up, gp;
+            ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &rp, &up, &gp);
+            printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
+                   gmn, gmx, gavg, (unsigned long)rp, (unsigned long)up,
+                   (unsigned long)gp);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[view]\n%s", view);

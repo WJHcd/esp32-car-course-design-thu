@@ -204,7 +204,11 @@ void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_
         return;
     }
 
-    /* 完整画面等比例缩放（letterbox），不再裁掉左右两侧目标。 */
+    /* 完整画面等比例缩放（letterbox），不再裁掉左右两侧目标。
+     * ⚠️ 显示层水平镜像（2026-09-03）：检测/误差链路保持 CAM_FLIP_X=1
+     * 的实车标定状态不动，此处仅让人眼观看的画面与实际左右一致——
+     * 识别框与画面一起镜像，叠加关系不变。若日后摄像头安装方向再次
+     * 变化导致屏幕又反，改这里 sx 的取反即可，勿动 CAM_FLIP_X。 */
     int dst_w = TFT_WIDTH;
     int dst_h = frame_h * dst_w / frame_w;
     if (dst_h > TFT_HEIGHT) {
@@ -226,7 +230,8 @@ void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_
             uint16_t color = TFT_COLOR_BLACK;
             if (dx >= dst_x0 && dx < dst_x0 + dst_w &&
                 dy >= dst_y0 && dy < dst_y0 + dst_h) {
-                const int sx = (dx - dst_x0) * frame_w / dst_w;
+                const int sx = (frame_w - 1) -
+                               (dx - dst_x0) * frame_w / dst_w;   /* 水平镜像 */
                 const int sy = (dy - dst_y0) * frame_h / dst_h;
                 const uint8_t *px = rgb888 +
                     ((size_t)sy * (size_t)frame_w + (size_t)sx) * 3;

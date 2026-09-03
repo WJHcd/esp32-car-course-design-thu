@@ -52,7 +52,11 @@
  * 锐角顶点宽黑区误判成 T 线）。 */
 #define CAM_WIDE_ROW_PCT                  45
 /* 水平镜像：1 = 整帧左右翻转后再检测/显示。摄像头水平装反（实车转向
- * 方向与预期相反）时置 1；翻转在解码后统一做，检测与两路预览自动一致 */
+ * 方向与预期相反）时置 1；翻转在解码后统一做，检测与两路预览自动一致。
+ * ⚠️ 2026-09-03：勿再改此值——巡线方向已按当前组合（翻转+STEERING_SIGN）
+ * 实车标定正确，改动会使整条方向链失配。屏幕左右与实际相反的问题是
+ * 显示层问题，已在 tft_st7735_show_camera_frame 渲染时做水平镜像解决，
+ * 机器侧（检测/误差/转向）保持不变。 */
 #define CAM_FLIP_X                          1
 
 /*
@@ -87,7 +91,7 @@ bool camera_line_init(void);
 void camera_line_get(camera_line_result_t *out);
 
 /**
- * @brief 获取最近一帧的找球任务三色识别结果（黑球/蓝球/红角标）
+ * @brief 获取最近一帧的找球任务识别结果（红球/蓝球/绿角标）
  * @param out 输出结果；每帧覆盖，摄像头未就绪时全零
  */
 void camera_line_get_ball(ball_field_result_t *out);

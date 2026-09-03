@@ -460,7 +460,7 @@ static void processing_task(void *args)
 
         detect_line_centroid(rgb_buf, jpeg_out.width, jpeg_out.height, &s_result);
 
-        /* 找球任务目标识别（黑球/蓝球/红角标），结果供 ball_task 读取。
+        /* 找球任务目标识别（红球/蓝球/绿角标），结果供 ball_task 读取。
          * 成本 ~1ms/帧，始终运行；巡线阶段上层不读即可。 */
         static int ball_w = -1, ball_h = -1;
         if (ball_w != (int)jpeg_out.width || ball_h != (int)jpeg_out.height) {
@@ -471,15 +471,16 @@ static void processing_task(void *args)
         }
         ball_detect_process_rgb888(rgb_buf, &s_ball_field);
 
-        /* 识别结果叠加方框：黑球黄框 / 蓝球绿框 / 红角标紫框。
-         * 黑球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
+        /* 识别结果叠加方框：红球黄框 / 蓝球绿框 / 角标紫框（显示色，
+         * 实物为绿色——紫框与绿框区分，避免与蓝球的绿框混淆）。
+         * 球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
-                      &s_ball_field.black_ball, 255, 255, 0);
+                      &s_ball_field.red_ball, 255, 255, 0);
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
                       &s_ball_field.blue_ball, 0, 255, 0);
-        for (int i = 0; i < s_ball_field.red_marker_count; i++) {
+        for (int i = 0; i < s_ball_field.marker_count; i++) {
             draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
-                          &s_ball_field.red_marker[i], 255, 0, 255);
+                          &s_ball_field.marker[i], 255, 0, 255);
         }
 
         /* 帧回调挪到识别与叠加之后：TFT 显示的是带识别框的画面 */

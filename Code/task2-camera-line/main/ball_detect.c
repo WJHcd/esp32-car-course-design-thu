@@ -3,7 +3,9 @@
 
 /* ============================================================
  * 三色识别实现：逐像素分类 → 4× 降采样占用网格 → flood-fill
- * 连通域 → 形状过滤（宽高比/填充率）→ 每色取最大（红取前二）。
+ * 连通域 → 形状过滤（宽高比/填充率）→ 每色取最大合格团块。
+ * （2026-09-03：原黑球改红球，黑类移除、红色类改按球提取；
+ *  角标定为绿色、独立建类提取。）
  *
  * 每帧成本：全帧像素分类 ~0.5ms + 三张 80x60 网格的 flood fill
  * （合计 <4800 格）≈ 0.1ms，远小于 JPEG 解码。
@@ -22,12 +24,12 @@ typedef struct {
     int16_t stack[GRID_W_MAX * GRID_H_MAX]; /* flood fill 栈 */
 } color_grid_t;
 
-static color_grid_t s_grid_black;
-static color_grid_t s_grid_blue;
 static color_grid_t s_grid_red;
+static color_grid_t s_grid_blue;
+static color_grid_t s_grid_green;
 static char s_debug_ascii[(GRID_W_MAX / 2 + 2) * (GRID_H_MAX / 2 + 1)];
 static int s_diag_min, s_diag_max, s_diag_avg;   /* 中心区灰度诊断 */
-static uint32_t s_dbg_black_px, s_dbg_blue_px, s_dbg_red_px;
+static uint32_t s_dbg_red_px, s_dbg_blue_px, s_dbg_green_px;
 
 void ball_detect_init(int width, int height)
 {
@@ -41,7 +43,7 @@ void ball_detect_init(int width, int height)
     if (s_grid_h < 1) s_grid_h = 1;
 }
 
-/* ---- 像素级颜色分类（蓝/红先判，避免深蓝被黑误收）---- */
+/* ---- 像素级颜色分类（蓝/红/绿依次判定；白场地高光不会被误收）---- */
 static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
 {
     if (b > BALL_BLUE_MIN_B && b - (r > g ? r : g) > BALL_BLUE_DELTA) {
@@ -50,9 +52,8 @@ static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
     if (r > BALL_RED_R_MIN && r - g > BALL_RED_DELTA && r - b > BALL_RED_DELTA) {
         return 2;                                   /* 红 */
     }
-    const uint16_t gray = (uint16_t)((r * 77 + g * 150 + b * 29) >> 8);
-    if (gray < BALL_BLACK_GRAY_MAX) {
-        return 3;                                   /* 黑 */
+    if (g > BALL_GREEN_MIN_G && g - (r > b ? r : b) > BALL_GREEN_DELTA) {
+        return 3;                                   /* 绿（角标） */
     }
     return 0;
 }
@@ -180,7 +181,7 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
         }
     }
 
-    /* 按面积从大到小排序（红角标两个时，[0] 恒为较大者） */
+    /* 按面积从大到小排序（保证同色候选多时 [0] 恒为最大者） */
     for (int i = 1; i < *out_count; i++) {
         for (int j = i; j > 0; j--) {
             if (out_blobs[j].cell_count > out_blobs[j - 1].cell_count) {
@@ -194,23 +195,25 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
 
 void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 {
-    memset(&s_grid_black, 0, sizeof(s_grid_black));
-    memset(&s_grid_blue, 0, sizeof(s_grid_blue));
     memset(&s_grid_red, 0, sizeof(s_grid_red));
+    memset(&s_grid_blue, 0, sizeof(s_grid_blue));
+    memset(&s_grid_green, 0, sizeof(s_grid_green));
 
     /* 逐像素分类并落到降采样网格。球的圆弧边缘、高光和 JPEG 色块
      * 会让格内颜色不纯，使用较低命中数保住小目标，噪声交给连通域
      * 的面积/紧凑度过滤。 */
     const int cells_x = s_grid_w, cells_y = s_grid_h;
-    uint32_t tot_black = 0, tot_blue = 0, tot_red = 0;
+    uint32_t tot_red = 0, tot_blue = 0, tot_green = 0;
+    /* 底部车体区域不参与分类（画面下方约 20% 是车自身，见 ball_detect.h） */
+    const int y_max = s_height - s_height * BALL_DETECT_Y_BOTTOM_PCT / 100;
 
     for (int gy = 0; gy < cells_y; gy++) {
         for (int py = 0; py < BALL_GRID_DIV; py++) {
             const int y = gy * BALL_GRID_DIV + py;
-            if (y >= s_height) break;
+            if (y >= s_height || y >= y_max) break;
             const uint8_t *row = rgb + (size_t)y * s_width * 3;
             for (int gx = 0; gx < cells_x; gx++) {
-                int black = 0, blue = 0, red = 0;
+                int red = 0, blue = 0, green = 0;
                 for (int px = 0; px < BALL_GRID_DIV; px++) {
                     const int x = gx * BALL_GRID_DIV + px;
                     if (x >= s_width) break;
@@ -218,36 +221,36 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                     switch (pixel_class(p[0], p[1], p[2])) {
                     case 1: blue++; tot_blue++; break;
                     case 2: red++; tot_red++; break;
-                    case 3: black++; tot_black++; break;
+                    case 3: green++; tot_green++; break;
                     default: break;
                     }
                 }
-                if (black >= BALL_CELL_HIT_MIN) s_grid_black.occ[gy * cells_x + gx] = 1;
-                if (blue  >= BALL_CELL_HIT_MIN) s_grid_blue.occ[gy * cells_x + gx] = 1;
                 if (red   >= BALL_CELL_HIT_MIN) s_grid_red.occ[gy * cells_x + gx] = 1;
+                if (blue  >= BALL_CELL_HIT_MIN) s_grid_blue.occ[gy * cells_x + gx] = 1;
+                if (green >= BALL_CELL_HIT_MIN) s_grid_green.occ[gy * cells_x + gx] = 1;
             }
         }
     }
-    s_dbg_black_px = tot_black;
-    s_dbg_blue_px = tot_blue;
     s_dbg_red_px = tot_red;
+    s_dbg_blue_px = tot_blue;
+    s_dbg_green_px = tot_green;
 
-    /* 调试视图与头文件约定保持一致：B=黑、L=蓝、R=红、.=空。
+    /* 调试视图与头文件约定保持一致：R=红球、L=蓝球、G=绿角标、.=空。
      * 每个字符汇总 2x2 个网格，方便直接判断颜色分类是否产生候选。 */
     {
         char *p = s_debug_ascii;
         for (int gy = 0; gy < cells_y; gy += 2) {
             for (int gx = 0; gx < cells_x; gx += 2) {
-                bool black = false, blue = false, red = false;
+                bool red = false, blue = false, green = false;
                 for (int dy = 0; dy < 2 && gy + dy < cells_y; dy++) {
                     for (int dx = 0; dx < 2 && gx + dx < cells_x; dx++) {
                         const int idx = (gy + dy) * cells_x + gx + dx;
-                        black |= s_grid_black.occ[idx] != 0;
-                        blue  |= s_grid_blue.occ[idx] != 0;
                         red   |= s_grid_red.occ[idx] != 0;
+                        blue  |= s_grid_blue.occ[idx] != 0;
+                        green |= s_grid_green.occ[idx] != 0;
                     }
                 }
-                *p++ = red ? 'R' : (blue ? 'L' : (black ? 'B' : '.'));
+                *p++ = red ? 'R' : (blue ? 'L' : (green ? 'G' : '.'));
             }
             *p++ = '\n';
         }
@@ -281,12 +284,14 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 
     memset(out, 0, sizeof(*out));
     int n;
-    extract_blobs(&s_grid_black, &out->black_ball, 1, &n, true);
+    extract_blobs(&s_grid_red, &out->red_ball, 1, &n, true);
     extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, true);
-    int red_n = 0;
-    extract_blobs(&s_grid_red, out->red_marker, BALL_RED_MARKER_MAX, &red_n,
+    /* 绿角标：绿色类无同色干扰源（红球/蓝球/蓝界线/黑线全部异色），
+     * 独立网格 + 宽松形状过滤（容纳远距离小块/细长反光），取前二。 */
+    int marker_n = 0;
+    extract_blobs(&s_grid_green, out->marker, BALL_MARKER_MAX, &marker_n,
                   false);
-    out->red_marker_count = (uint8_t)red_n;
+    out->marker_count = (uint8_t)marker_n;
 }
 
 void ball_detect_debug_ascii(char *out, int out_len)
@@ -297,13 +302,13 @@ void ball_detect_debug_ascii(char *out, int out_len)
 }
 
 void ball_detect_get_gray_diag(int *mn, int *mx, int *avg,
-                               uint32_t *black_px, uint32_t *blue_px,
-                               uint32_t *red_px)
+                               uint32_t *red_px, uint32_t *blue_px,
+                               uint32_t *green_px)
 {
     if (mn)  *mn  = s_diag_min;
     if (mx)  *mx  = s_diag_max;
     if (avg) *avg = s_diag_avg;
-    if (black_px) *black_px = s_dbg_black_px;
-    if (blue_px)  *blue_px  = s_dbg_blue_px;
     if (red_px)   *red_px   = s_dbg_red_px;
+    if (blue_px)  *blue_px  = s_dbg_blue_px;
+    if (green_px) *green_px = s_dbg_green_px;
 }
