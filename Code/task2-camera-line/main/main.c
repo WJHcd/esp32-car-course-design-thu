@@ -33,8 +33,9 @@
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  *   7 = 摄像头纯巡线实车测试（无超声/避障；含弯道丢线原地恢复）
  *   8 = 找球/推球任务独立测试（跳过巡线避障，直接进推球状态机）
+ *   9 = 黑球/蓝球纯识别测试（不初始化电机，只显示完整画面与识别框）
  * ============================================================ */
-#define TASK2_MODE  8
+#define TASK2_MODE  9
 
 static const char *TAG = "task2";
 
@@ -147,6 +148,7 @@ static void app_camera_preview(void)
     printf("屏幕有画面 = 摄像头正常；仍白屏 = 检查接线/供电。\n\n");
 
     tft_st7735_init();              /* 含红绿蓝黑上电自检 */
+    tft_st7735_set_camera_mode(true);
     if (!camera_line_init()) {
         ESP_LOGE(TAG, "摄像头初始化失败");
         return;
@@ -155,6 +157,73 @@ static void app_camera_preview(void)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+/*
+ * 球体纯识别模式：不初始化 walking/encoder/ultrasonic，确保电机不会动作。
+ * TFT 等比例显示完整摄像头画面：黑球黄框、蓝球绿框、红角标紫框。
+ * 串口同时输出 detected/位置/面积和颜色掩膜，便于现场标定阈值。
+ */
+static void app_ball_detect_test(void)
+{
+    gimbal_init();
+    gimbal_set_tilt(BALL_TASK_TILT_SURVEY_DEG);
+    tft_st7735_init();
+    tft_st7735_set_camera_mode(true);
+
+    if (!camera_line_init()) {
+        ESP_LOGE(TAG, "摄像头初始化失败");
+        return;
+    }
+    camera_line_set_stats_log(false);
+    camera_line_set_frame_cb(tft_st7735_show_camera_frame);
+
+    printf("\n========== 黑球/蓝球纯识别测试（MODE 9） ==========\n");
+    printf("电机未初始化，不会移动。TFT：黑球黄框、蓝球绿框、红角标紫框。\n");
+    printf("画面采用完整等比例缩放，左右边缘目标不会被裁掉。\n\n");
+
+    uint32_t last_frame_seq = UINT32_MAX;
+    uint32_t last_ascii_ms = 0;
+    while (true) {
+        camera_line_result_t cam;
+        ball_field_result_t balls;
+        camera_line_get(&cam);
+        camera_line_get_ball(&balls);
+
+        if (cam.frame_seq != last_frame_seq) {
+            last_frame_seq = cam.frame_seq;
+            printf("[detect] frame=%lu 黑(%d x=%.2f y=%.2f %ux%u cells=%lu) "
+                   "蓝(%d x=%.2f y=%.2f %ux%u cells=%lu) 红=%u\n",
+                   (unsigned long)cam.frame_seq,
+                   balls.black_ball.detected,
+                   (double)balls.black_ball.x_ratio,
+                   (double)balls.black_ball.y_ratio,
+                   balls.black_ball.width_px, balls.black_ball.height_px,
+                   (unsigned long)balls.black_ball.cell_count,
+                   balls.blue_ball.detected,
+                   (double)balls.blue_ball.x_ratio,
+                   (double)balls.blue_ball.y_ratio,
+                   balls.blue_ball.width_px, balls.blue_ball.height_px,
+                   (unsigned long)balls.blue_ball.cell_count,
+                   balls.red_marker_count);
+        }
+
+        const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if (now_ms - last_ascii_ms >= 1000u) {
+            last_ascii_ms = now_ms;
+            int gmn, gmx, gavg;
+            uint32_t black_px, blue_px, red_px;
+            ball_detect_get_gray_diag(&gmn, &gmx, &gavg,
+                                      &black_px, &blue_px, &red_px);
+            printf("[color] gray=%d..%d avg=%d 黑px=%lu 蓝px=%lu 红px=%lu\n",
+                   gmn, gmx, gavg, (unsigned long)black_px,
+                   (unsigned long)blue_px, (unsigned long)red_px);
+            char view[1400];
+            ball_detect_debug_ascii(view, (int)sizeof(view));
+            printf("[mask] B=黑 L=蓝 R=红\n%s", view);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -210,6 +279,7 @@ void app_ball_task_test(void)
     walking_init();
     walking_set_output_enabled(true);
     tft_st7735_init();
+    tft_st7735_set_camera_mode(true);
     /* 注意：不要 start_telemetry——遥测任务会用五行信息覆盖摄像头画面 */
     if (!camera_line_init()) {
         ESP_LOGE(TAG, "摄像头初始化任务创建失败；电机保持禁用");
@@ -320,6 +390,7 @@ void app_integrated(void)
     uint32_t tick = 0;
     uint16_t last_distance = ULTRASONIC_INVALID;
     car_state_t last_state = walking_get_state();
+    bool showing_ball_camera = false;
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
@@ -344,6 +415,19 @@ void app_integrated(void)
         const car_state_t state = walking_get_state();
         const bool state_changed = (state != last_state);
         last_state = state;
+
+        /* 巡线/避障显示遥测；找球阶段独占显示带框摄像头画面。
+         * tft 内部的模式互斥保证两类刷新不会交叉发送 SPI 命令。 */
+        const bool want_ball_camera = (state == CAR_STATE_BALL_TASK);
+        if (want_ball_camera && !showing_ball_camera) {
+            tft_st7735_set_camera_mode(true);
+            camera_line_set_frame_cb(tft_st7735_show_camera_frame);
+            showing_ball_camera = true;
+        } else if (!want_ball_camera && showing_ball_camera) {
+            camera_line_set_frame_cb(NULL);
+            tft_st7735_set_camera_mode(false);
+            showing_ball_camera = false;
+        }
 
         if (state_changed || tick % 25 == 0) {
             walking_command_t cmd = walking_get_last_command();
@@ -382,6 +466,8 @@ void app_main(void)
     app_camera_follow_test();
 #elif TASK2_MODE == 8
     app_ball_task_test();
+#elif TASK2_MODE == 9
+    app_ball_detect_test();
 #else
     app_integrated();
 #endif

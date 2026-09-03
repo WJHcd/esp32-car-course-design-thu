@@ -6,6 +6,7 @@
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
@@ -76,6 +77,10 @@ static uint8_t s_distance_next_index;
 static volatile bool s_line_has;
 static volatile float s_line_error;
 static volatile bool s_line_stable;
+static volatile bool s_camera_mode;
+static volatile bool s_telemetry_clear_pending;
+static SemaphoreHandle_t s_draw_mutex;
+static TaskHandle_t s_tft_task_handle;
 
 static void tft_write(bool is_data, const void *data, size_t length)
 {
@@ -184,40 +189,59 @@ static void tft_draw_text(uint16_t x, uint16_t y, const char *text, uint16_t col
 
 void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_h)
 {
-    if (s_spi == NULL || rgb888 == NULL || frame_w <= 0 || frame_h <= 0) {
+    if (s_spi == NULL || !s_camera_mode || rgb888 == NULL ||
+        frame_w <= 0 || frame_h <= 0 || s_draw_mutex == NULL) {
         return;
     }
 
-    /*
-     * 中央裁剪保持纵横比：源区域宽高比 = 128/160（TFT 竖屏）。
-     * 对 320x240 输入：src_w = 240*128/160 = 192，左右各裁 64px，
-     * 高方向全取。点采样降采样，内容完整可见、不变形。
-     */
-    const int src_w = frame_h * TFT_WIDTH / TFT_HEIGHT;
-    if (src_w > frame_w || src_w <= 0) {
+    if (xSemaphoreTake(s_draw_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return;
     }
-    const int src_x0 = (frame_w - src_w) / 2;
+
+    /* 等待锁时显示模式可能已切回遥测，重新确认后再写屏。 */
+    if (!s_camera_mode) {
+        xSemaphoreGive(s_draw_mutex);
+        return;
+    }
+
+    /* 完整画面等比例缩放（letterbox），不再裁掉左右两侧目标。 */
+    int dst_w = TFT_WIDTH;
+    int dst_h = frame_h * dst_w / frame_w;
+    if (dst_h > TFT_HEIGHT) {
+        dst_h = TFT_HEIGHT;
+        dst_w = frame_w * dst_h / frame_h;
+    }
+    if (dst_w <= 0 || dst_h <= 0) {
+        xSemaphoreGive(s_draw_mutex);
+        return;
+    }
+    const int dst_x0 = (TFT_WIDTH - dst_w) / 2;
+    const int dst_y0 = (TFT_HEIGHT - dst_h) / 2;
 
     uint8_t pixels[TFT_WIDTH * 2];   /* 一行 128 像素 RGB565，高字节在前 */
     tft_set_window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
 
     for (int dy = 0; dy < TFT_HEIGHT; dy++) {
-        const int sy = dy * frame_h / TFT_HEIGHT;
-        const uint8_t *row = rgb888 + (size_t)sy * (size_t)frame_w * 3;
         for (int dx = 0; dx < TFT_WIDTH; dx++) {
-            const int sx = src_x0 + dx * src_w / TFT_WIDTH;
-            const uint8_t *px = row + (size_t)sx * 3;
-            const uint16_t r5 = px[0] >> 3;
-            const uint16_t g6 = px[1] >> 2;
-            const uint16_t b5 = px[2] >> 3;
-            /* 该屏 R/B 物理互换：发送时交换 R/B 位，屏幕颜色才正确 */
-            const uint16_t color = (uint16_t)((b5 << 11) | (g6 << 5) | r5);
+            uint16_t color = TFT_COLOR_BLACK;
+            if (dx >= dst_x0 && dx < dst_x0 + dst_w &&
+                dy >= dst_y0 && dy < dst_y0 + dst_h) {
+                const int sx = (dx - dst_x0) * frame_w / dst_w;
+                const int sy = (dy - dst_y0) * frame_h / dst_h;
+                const uint8_t *px = rgb888 +
+                    ((size_t)sy * (size_t)frame_w + (size_t)sx) * 3;
+                const uint16_t r5 = px[0] >> 3;
+                const uint16_t g6 = px[1] >> 2;
+                const uint16_t b5 = px[2] >> 3;
+                /* 该屏 R/B 物理互换：发送时交换 R/B 位，屏幕颜色才正确 */
+                color = (uint16_t)((b5 << 11) | (g6 << 5) | r5);
+            }
             pixels[dx * 2]     = (uint8_t)(color >> 8);
             pixels[dx * 2 + 1] = (uint8_t)color;
         }
         tft_write(true, pixels, sizeof(pixels));
     }
+    xSemaphoreGive(s_draw_mutex);
 }
 
 static int rpm_for_display(float rpm, bool valid)
@@ -264,7 +288,17 @@ static void tft_task(void *unused)
     (void)unused;
     while (true) {
         encoder_update();
-        tft_draw_telemetry();
+        if (!s_camera_mode && s_draw_mutex != NULL &&
+            xSemaphoreTake(s_draw_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (!s_camera_mode) {
+                if (s_telemetry_clear_pending) {
+                    tft_fill_screen(TFT_COLOR_BLACK);
+                    s_telemetry_clear_pending = false;
+                }
+                tft_draw_telemetry();
+            }
+            xSemaphoreGive(s_draw_mutex);
+        }
         vTaskDelay(pdMS_TO_TICKS(TFT_REFRESH_MS));
     }
 }
@@ -305,6 +339,8 @@ void tft_st7735_init(void)
         .queue_size = 1,
     };
     ESP_ERROR_CHECK(spi_bus_add_device(TFT_HOST, &dev_cfg, &s_spi));
+    s_draw_mutex = xSemaphoreCreateMutex();
+    ESP_ERROR_CHECK(s_draw_mutex != NULL ? ESP_OK : ESP_ERR_NO_MEM);
 
     /*
      * DC 引脚在 spi_bus_add_device 之后才配置为输出：SPI 主机初始化时
@@ -381,8 +417,23 @@ void tft_st7735_init(void)
 
 void tft_st7735_start_telemetry(void)
 {
-    BaseType_t created = xTaskCreate(tft_task, "tft", 6144, NULL, 1, NULL);
+    if (s_tft_task_handle != NULL) {
+        return;
+    }
+    BaseType_t created = xTaskCreate(tft_task, "tft", 6144, NULL, 1,
+                                     &s_tft_task_handle);
     ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+}
+
+void tft_st7735_set_camera_mode(bool enabled)
+{
+    const bool was_enabled = s_camera_mode;
+    s_camera_mode = enabled;
+    if (was_enabled && !enabled) {
+        /* 控制循环不能等待一次约 0.33s 的整屏 SPI；交给 TFT 任务在
+         * 获得显示锁后清除最后一帧，再恢复遥测页。 */
+        s_telemetry_clear_pending = true;
+    }
 }
 
 void tft_st7735_panel_test(void)

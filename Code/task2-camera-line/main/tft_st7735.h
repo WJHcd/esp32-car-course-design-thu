@@ -9,6 +9,12 @@ void tft_st7735_init(void);
 /** 启动低优先级仪表刷新任务；须先调用 tft_st7735_init()。 */
 void tft_st7735_start_telemetry(void);
 
+/**
+ * 切换 TFT 显示所有权。false=遥测页，true=摄像头页。
+ * 摄像头页期间遥测任务暂停写屏，避免两条任务交叉发送 SPI 命令。
+ */
+void tft_st7735_set_camera_mode(bool enabled);
+
 /** 仅面板诊断：循环显示红、绿、蓝、黑，不依赖电机、编码器或传感器。 */
 void tft_st7735_panel_test(void);
 
@@ -28,8 +34,9 @@ void tft_st7735_set_line(bool has_line, float error, bool stable);
 
 /**
  * 将一帧 RGB888 图像显示到 TFT（摄像头画面预览用）。
- * 从输入帧中央裁剪保持纵横比后点采样缩放到 128x160，
- * 并按该屏 R/B 物理互换做了通道修正。未初始化时直接返回。
+ * 将完整输入帧等比例缩放到 128x160 内，空白区域填黑，确保位于
+ * 摄像头两侧的球和识别框不会被中央裁剪掉。按该屏 R/B 物理互换
+ * 做了通道修正。未初始化或不在摄像头模式时直接返回。
  * 注意：全屏刷新约需 0.33s（SPI 1MHz），调用方注意帧率控制。
  */
 void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_h);

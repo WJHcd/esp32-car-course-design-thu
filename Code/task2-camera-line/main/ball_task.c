@@ -43,6 +43,7 @@ static ball_task_state_t s_state;
 static uint32_t s_state_enter_ms;
 static uint32_t s_total_start_ms;
 static uint32_t s_last_frame_seq;
+static uint32_t s_last_ball_seen_ms;
 
 static inline uint32_t since_ms(uint32_t now_ms, uint32_t since_ms_)
 {
@@ -71,6 +72,9 @@ static void set_state(ball_task_state_t st, uint32_t now_ms)
 {
     s_state = st;
     s_state_enter_ms = now_ms;
+    if (st == BALL_TASK_PUSH) {
+        s_last_ball_seen_ms = now_ms;
+    }
     ESP_LOGI(TAG, "→ %s", s_state_name[st]);
 }
 
@@ -80,6 +84,7 @@ void ball_task_start(uint32_t now_ms)
     s_state_enter_ms = now_ms;
     s_total_start_ms = now_ms;
     s_last_frame_seq = 0;
+    s_last_ball_seen_ms = now_ms;
     memset(s_seen, 0, sizeof(s_seen));
     s_pending[TARGET_BLACK] = true;
     s_pending[TARGET_BLUE] = true;
@@ -94,6 +99,7 @@ void ball_task_reset(uint32_t now_ms)
     s_state_enter_ms = 0;
     s_total_start_ms = 0;
     s_last_frame_seq = 0;
+    s_last_ball_seen_ms = 0;
     memset(s_seen, 0, sizeof(s_seen));
     s_pending[TARGET_BLACK] = false;
     s_pending[TARGET_BLUE] = false;
@@ -234,6 +240,7 @@ void ball_task_update(const camera_line_result_t *cam,
         if (new_frame && ball->detected) {
             s_seen[s_current].x_ratio = ball->x_ratio;
             have_new_ball = true;
+            s_last_ball_seen_ms = now_ms;
 
             /* 转向目标：可见的红角标里选水平位置最接近球的那个 */
             const ball_blob_t *best_marker = NULL;
@@ -270,9 +277,17 @@ void ball_task_update(const camera_line_result_t *cam,
             const float off = steer_target - 0.5f;
             const int turn = (int)(off * BALL_PUSH_STEER_GAIN);
             walking_direct_command(BALL_PUSH_SPEED_PCT, turn, 0);
-        } else {
-            /* 球贴近车头滑出视野：盲走一小段（球就在车前被顶着） */
+        } else if (since_ms(now_ms, s_last_ball_seen_ms) <= BALL_LOST_BLIND_MS) {
+            /* 球贴近车头滑出视野：只在限定时间内短暂盲走。 */
             walking_direct_command(BALL_PUSH_SPEED_PCT, 0, 0);
+        } else {
+            /* 原代码虽定义 BALL_LOST_BLIND_MS，却会一直前进到 15s 超时。
+             * 超过盲走窗口后立即停车，回 AIM 等待重新捕获当前球。 */
+            walking_direct_command(0, 0, 0);
+            ESP_LOGW(TAG, "%s 丢失超过 %u ms，停止并重新对准",
+                     s_color_name[s_current], (unsigned)BALL_LOST_BLIND_MS);
+            set_state(BALL_TASK_AIM, now_ms);
+            break;
         }
 
         /* 单球推球超时：视为完成该球的尝试，换下一球 */

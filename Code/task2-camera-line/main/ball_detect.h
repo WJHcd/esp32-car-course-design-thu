@@ -22,6 +22,7 @@
 
 /* ---- 颜色阈值标定区（2026-09-01 现场暗光标定）---- */
 #define BALL_GRID_DIV           4      /* 降采样倍数：每格 = 4x4 像素 */
+#define BALL_CELL_HIT_MIN       4      /* 16 像素中至少 4 个命中；原来 8 个会吃掉小球边缘 */
 #define BALL_BLACK_GRAY_MAX     150    /* 黑：灰度低于此值判黑。2026-09-01
                                           * 100→150：实测球面呈深灰(~100-160)、
                                           * 原阈值只抓住最暗斑点凑不成团 */
@@ -30,11 +31,17 @@
 #define BALL_RED_R_MIN          120    /* 红角标：R 通道最小值 */
 #define BALL_RED_DELTA          40     /* 红角标：R 需比 G/B 高出的差值 */
 
-/* ---- 连通域形状过滤（腐蚀后球团核心；阈值相应放宽）---- */
+/* ---- 连通域形状过滤 ----
+ * 小球在 240x160 解码帧里通常只有十几像素，不能先做强腐蚀。
+ * 这里保留 4x4 网格以控制 RAM，用较低格内门限保留边缘，再靠
+ * 连通域的紧凑度过滤细长赛道线。 */
+#define BALL_ERODE_ENABLE       0      /* 诊断/当前实车：禁用会吞掉小球的强腐蚀 */
 #define BALL_MIN_CELLS          3      /* 最少占用格子数（1 格 = 16 像素） */
-#define BALL_ASPECT_MIN         0.35f  /* 包围盒宽高比下限（球 ≈ 1） */
-#define BALL_ASPECT_MAX         3.5f   /* 包围盒宽高比上限 */
-#define BALL_FILL_MIN           0.35f  /* 填充率下限（实际格数/包围盒面积） */
+#define BALL_MIN_BOX_CELLS      2      /* 宽、高至少各 2 格，排除单行/单列噪声 */
+#define BALL_ASPECT_MAX         2.2f   /* max(宽,高)/min(宽,高)，球应接近 1 */
+#define BALL_FILL_MIN           0.28f  /* 填充率下限（圆形小目标允许边缘缺口） */
+#define BALL_MAX_BOX_WIDTH_PCT  55     /* 过大的暗区/赛道区域不作为球 */
+#define BALL_MAX_BOX_HEIGHT_PCT 70
 
 #define BALL_RED_MARKER_MAX     2      /* 红色角标最多输出两个 */
 

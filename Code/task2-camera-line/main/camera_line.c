@@ -351,8 +351,9 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
                           uint8_t cr, uint8_t cg, uint8_t cb)
 {
     if (!b->detected) return;
-    int x0 = (int)b->x_min_px - 2, y0 = (int)b->y_min_px - 2;
-    int x1 = x0 + (int)b->width_px + 3, y1 = y0 + (int)b->height_px + 3;
+    const int thickness = 4;
+    int x0 = (int)b->x_min_px - 3, y0 = (int)b->y_min_px - 3;
+    int x1 = x0 + (int)b->width_px + 5, y1 = y0 + (int)b->height_px + 5;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 >= w) x1 = w - 1;
@@ -360,7 +361,7 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
     if (x1 <= x0 || y1 <= y0) return;
 
     for (int x = x0; x <= x1; x++) {
-        for (int k = 0; k < 2; k++) {
+        for (int k = 0; k < thickness && y0 + k <= y1 - k; k++) {
             uint8_t *pa = rgb + (size_t)(y0 + k) * w * 3 + (size_t)x * 3;
             pa[0] = cr; pa[1] = cg; pa[2] = cb;
             uint8_t *pb = rgb + (size_t)(y1 - k) * w * 3 + (size_t)x * 3;
@@ -368,7 +369,7 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
         }
     }
     for (int y = y0; y <= y1; y++) {
-        for (int k = 0; k < 2; k++) {
+        for (int k = 0; k < thickness && x0 + k <= x1 - k; k++) {
             uint8_t *pa = rgb + (size_t)y * w * 3 + (size_t)(x0 + k) * 3;
             pa[0] = cr; pa[1] = cg; pa[2] = cb;
             uint8_t *pb = rgb + (size_t)y * w * 3 + (size_t)(x1 - k) * 3;
@@ -402,10 +403,19 @@ static void processing_task(void *args)
         /* 解码输出缩放：摄像头分辨率高于 320x240 时按 1/2 输出
          * （480x320→240x160，兼顾解码 CPU 与检测精度）。个别相机
          * 缩放档不支持时逐级回退。 */
-        esp_jpeg_image_scale_t try_scales[3] = {
-            JPEG_IMAGE_SCALE_1_2, JPEG_IMAGE_SCALE_1_4, JPEG_IMAGE_SCALE_0,
-        };
-        int n_scales = (s_stream_cfg.vs_format.h_res > CAM_FRAME_WIDTH) ? 3 : 1;
+        esp_jpeg_image_scale_t try_scales[3];
+        int n_scales;
+        if (s_stream_cfg.vs_format.h_res > CAM_FRAME_WIDTH) {
+            try_scales[0] = JPEG_IMAGE_SCALE_1_2;
+            try_scales[1] = JPEG_IMAGE_SCALE_1_4;
+            try_scales[2] = JPEG_IMAGE_SCALE_0;
+            n_scales = 3;
+        } else {
+            /* 原代码 n_scales=1 时仍使用数组首项 1/2，导致相机若恰好
+             * 协商到 320x240，实际只解出 160x120，小球尺寸再减半。 */
+            try_scales[0] = JPEG_IMAGE_SCALE_0;
+            n_scales = 1;
+        }
         esp_err_t err = ESP_FAIL;
         esp_jpeg_image_output_t jpeg_out;
         const int64_t t0 = esp_timer_get_time();
@@ -461,9 +471,10 @@ static void processing_task(void *args)
         }
         ball_detect_process_rgb888(rgb_buf, &s_ball_field);
 
-        /* 识别结果叠加方框：黑球白框 / 蓝球绿框 / 红角标紫框 */
+        /* 识别结果叠加方框：黑球黄框 / 蓝球绿框 / 红角标紫框。
+         * 黑球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
-                      &s_ball_field.black_ball, 255, 255, 255);
+                      &s_ball_field.black_ball, 255, 255, 0);
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
                       &s_ball_field.blue_ball, 0, 255, 0);
         for (int i = 0; i < s_ball_field.red_marker_count; i++) {

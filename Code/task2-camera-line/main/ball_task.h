@@ -27,7 +27,7 @@ typedef enum {
 /* ---- 现场标定参数 ---- */
 #define BALL_TASK_TILT_SURVEY_DEG   35     /* 扫视时云台仰角 */
 #define BALL_GIMBAL_DWELL_MS        600u   /* 抬云台后的静置时长 */
-#define BALL_SURVEY_TURN_PCT        0   /* 诊断：暂停扫视旋转，静止盯正前方 */      /* 扫视旋转力度 */
+#define BALL_SURVEY_TURN_PCT       12      /* 原地慢速扫视；纯识别请使用 MODE 9 */
 #define BALL_SURVEY_CONFIRM         2      /* 每个球需确认的帧数 */
 #define BALL_SURVEY_TIMEOUT_MS      12000u /* 扫视总超时 */
 #define BALL_AIM_DEADBAND           0.08f  /* 对准死区（x_ratio 偏离中心） */

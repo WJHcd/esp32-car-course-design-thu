@@ -1,5 +1,4 @@
 #include "ball_detect.h"
-#include <stdio.h>
 #include <string.h>
 
 /* ============================================================
@@ -89,17 +88,14 @@ typedef struct {
     int min_x, min_y, max_x, max_y;
 } blob_cells_t;
 
-/* 诊断宽松模式（2026-09-01）：跳过形状过滤，任何 >=MIN_CELLS 的连通域
- * 都接受（只保留最大的）——用于确认"球能否被框上"，框出来后再收紧。
- * 置 0 恢复严格形状过滤。 */
-#define BALL_DIAG_LOOSE       1
-
 static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
-                          int max_out, int *out_count, const char *tag)
+                          int max_out, int *out_count, bool require_ball_shape)
 {
     *out_count = 0;
     memset(g->stack, 0, sizeof(g->stack));
-    erode_grid(g);
+    if (BALL_ERODE_ENABLE) {
+        erode_grid(g);
+    }
 
     for (int y0 = 0; y0 < s_grid_h; y0++) {
         for (int x0 = 0; x0 < s_grid_w; x0++) {
@@ -138,22 +134,25 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
                 }
             }
 
-            /* 形状过滤：紧凑球团 vs 细长线段（诊断宽松模式下跳过） */
+            /* 形状过滤：紧凑球团 vs 细长赛道线/边界线。aspect 的定义
+             * 恒 >=1，因此只需要上限；原来的 0.35 下限永远不会生效。 */
             if (c.count < BALL_MIN_CELLS) continue;
             const int bw = c.max_x - c.min_x + 1;
             const int bh = c.max_y - c.min_y + 1;
             const float aspect = (float)(bw > bh ? bw : bh) / (bw < bh ? bw : bh);
             const float fill = (float)c.count / (float)(bw * bh);
-            if (!BALL_DIAG_LOOSE) {
-                if (aspect < BALL_ASPECT_MIN || aspect > BALL_ASPECT_MAX) continue;
+            if (require_ball_shape) {
+                if (bw < BALL_MIN_BOX_CELLS || bh < BALL_MIN_BOX_CELLS) continue;
+                if (aspect > BALL_ASPECT_MAX) continue;
                 if (fill < BALL_FILL_MIN) continue;
-            } else if (*out_count == 0 && (c.count > 6)) {
-                /* 宽松诊断：打印首个大连通域的形状指标 */
-                printf("[blob] %s: cells=%d bbox=%dx%d aspect=%.2f fill=%.2f\n",
-                       tag, c.count, bw, bh, (double)aspect, (double)fill);
+                if (bw * BALL_GRID_DIV * 100 > s_width * BALL_MAX_BOX_WIDTH_PCT) continue;
+                if (bh * BALL_GRID_DIV * 100 > s_height * BALL_MAX_BOX_HEIGHT_PCT) continue;
             }
 
-            if (*out_count >= max_out) {
+            int slot;
+            if (*out_count < max_out) {
+                slot = (*out_count)++;
+            } else {
                 /* 已满：替换最小的那个（保持最大的前 max_out 个） */
                 int smallest = 0;
                 for (int i = 1; i < max_out; i++) {
@@ -162,10 +161,10 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
                     }
                 }
                 if (c.count <= (int)out_blobs[smallest].cell_count) continue;
-                *out_count = smallest;   /* 覆盖最小者 */
+                slot = smallest;
             }
 
-            ball_blob_t *out = &out_blobs[*out_count];
+            ball_blob_t *out = &out_blobs[slot];
             memset(out, 0, sizeof(*out));
             out->detected = true;
             out->cell_count = (uint32_t)c.count;
@@ -177,7 +176,7 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
             out->y_min_px = (uint16_t)(c.min_y * BALL_GRID_DIV);
             out->area_ratio = (float)c.count * BALL_GRID_DIV * BALL_GRID_DIV /
                               (float)(s_width * s_height);
-            (*out_count)++;
+
         }
     }
 
@@ -199,14 +198,11 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
     memset(&s_grid_blue, 0, sizeof(s_grid_blue));
     memset(&s_grid_red, 0, sizeof(s_grid_red));
 
-    /* 逐像素分类并落到降采样网格：格内命中过半才算占用 */
+    /* 逐像素分类并落到降采样网格。球的圆弧边缘、高光和 JPEG 色块
+     * 会让格内颜色不纯，使用较低命中数保住小目标，噪声交给连通域
+     * 的面积/紧凑度过滤。 */
     const int cells_x = s_grid_w, cells_y = s_grid_h;
-    const int half = BALL_GRID_DIV * BALL_GRID_DIV / 2;
     uint32_t tot_black = 0, tot_blue = 0, tot_red = 0;
-    static uint32_t gray_sum[GRID_W_MAX * GRID_H_MAX];
-    static uint16_t gray_n[GRID_W_MAX * GRID_H_MAX];
-    memset(gray_sum, 0, sizeof(gray_sum));
-    memset(gray_n, 0, sizeof(gray_n));
 
     for (int gy = 0; gy < cells_y; gy++) {
         for (int py = 0; py < BALL_GRID_DIV; py++) {
@@ -219,10 +215,6 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                     const int x = gx * BALL_GRID_DIV + px;
                     if (x >= s_width) break;
                     const uint8_t *p = row + (size_t)x * 3;
-                    const int g = (p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8;
-                    const int cidx = gy * cells_x + gx;
-                    gray_sum[cidx] += (uint32_t)g;
-                    gray_n[cidx]++;
                     switch (pixel_class(p[0], p[1], p[2])) {
                     case 1: blue++; tot_blue++; break;
                     case 2: red++; tot_red++; break;
@@ -230,9 +222,9 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                     default: break;
                     }
                 }
-                if (black >= half) s_grid_black.occ[gy * cells_x + gx] = 1;
-                if (blue  >= half) s_grid_blue.occ[gy * cells_x + gx] = 1;
-                if (red   >= half) s_grid_red.occ[gy * cells_x + gx] = 1;
+                if (black >= BALL_CELL_HIT_MIN) s_grid_black.occ[gy * cells_x + gx] = 1;
+                if (blue  >= BALL_CELL_HIT_MIN) s_grid_blue.occ[gy * cells_x + gx] = 1;
+                if (red   >= BALL_CELL_HIT_MIN) s_grid_red.occ[gy * cells_x + gx] = 1;
             }
         }
     }
@@ -240,18 +232,22 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
     s_dbg_blue_px = tot_blue;
     s_dbg_red_px = tot_red;
 
-    /* 调试视图：灰度数字地图（每 2 格取 1 格），字符 = 平均灰度/26：
-     * '0' 最黑 … '4' 中灰 … '7' 白底，一眼看出球和黑线的位置与灰度 */
+    /* 调试视图与头文件约定保持一致：B=黑、L=蓝、R=红、.=空。
+     * 每个字符汇总 2x2 个网格，方便直接判断颜色分类是否产生候选。 */
     {
         char *p = s_debug_ascii;
         for (int gy = 0; gy < cells_y; gy += 2) {
             for (int gx = 0; gx < cells_x; gx += 2) {
-                const int idx = gy * cells_x + gx;
-                const uint16_t n = gray_n[idx];
-                const int avg = n ? (int)(gray_sum[idx] / n) : 255;
-                int digit = avg / 26;
-                if (digit > 9) digit = 9;
-                *p++ = (char)('0' + digit);
+                bool black = false, blue = false, red = false;
+                for (int dy = 0; dy < 2 && gy + dy < cells_y; dy++) {
+                    for (int dx = 0; dx < 2 && gx + dx < cells_x; dx++) {
+                        const int idx = (gy + dy) * cells_x + gx + dx;
+                        black |= s_grid_black.occ[idx] != 0;
+                        blue  |= s_grid_blue.occ[idx] != 0;
+                        red   |= s_grid_red.occ[idx] != 0;
+                    }
+                }
+                *p++ = red ? 'R' : (blue ? 'L' : (black ? 'B' : '.'));
             }
             *p++ = '\n';
         }
@@ -285,10 +281,11 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 
     memset(out, 0, sizeof(*out));
     int n;
-    extract_blobs(&s_grid_black, &out->black_ball, 1, &n, "黑");
-    extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, "蓝");
+    extract_blobs(&s_grid_black, &out->black_ball, 1, &n, true);
+    extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, true);
     int red_n = 0;
-    extract_blobs(&s_grid_red, out->red_marker, BALL_RED_MARKER_MAX, &red_n, "红");
+    extract_blobs(&s_grid_red, out->red_marker, BALL_RED_MARKER_MAX, &red_n,
+                  false);
     out->red_marker_count = (uint8_t)red_n;
 }
 
