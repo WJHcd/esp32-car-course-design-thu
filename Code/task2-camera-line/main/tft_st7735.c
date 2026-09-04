@@ -15,8 +15,11 @@
 #define TFT_HOST              SPI2_HOST
 #define TFT_WIDTH             128
 #define TFT_HEIGHT            160
-/* 首次点亮阶段先用 1 MHz。显示数据量很小，低速更能适应杜邦线连接。 */
-#define TFT_SPI_CLOCK_HZ      (1 * 1000 * 1000)
+/* 2026-09-03 提速 1MHz→8MHz：整帧 40960 字节在 1MHz 下仅理论传输就要
+ * ~330ms，且帧回调在摄像头处理任务内同步执行，把视觉反馈周期压到约
+ * 3fps，放大了对准脉冲的空档（反馈文档）。8MHz 下整帧 ~55ms。
+ * 若实车出现花屏/颜色错乱（杜邦线信号质量），先降到 4MHz 观察。 */
+#define TFT_SPI_CLOCK_HZ      (8 * 1000 * 1000)
 #define TFT_REFRESH_MS        250
 /* polling 事务安全分块大小（字节）：无 DMA 缓冲时单事务上限约 64 字节，
  * 预留余量取 60；tft_write 内部按此分块，调用方无需关心。 */

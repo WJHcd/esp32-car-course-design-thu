@@ -9,17 +9,17 @@
  * 分别推到场地末端的两个绿色角标处（角标识别见 ball_detect.h）。
  * 云台抬到扫视角后【全程固定】，不再远近切换。
  *
- * v3 三点一线法（2026-09-03 重构；同日加 APPROACH 靠近段）：
+ * v3 三点一线法（2026-09-03 重构；同日晚间去掉 APPROACH，对准吸收接近）：
  *   SURVEY 静止等球（人工把球摆到镜头前；BALL_SURVEY_SPIN_ENABLE=1
- *   可恢复转圈搜索）→ APPROACH 朝选定球开进（远距离勉强识别到球、
- *   角标不可见），直到球到画面偏底部（=车已到球近前）→ ALIGN 利用车-
- *   球-角标三点共线的图像几何：【共线 ⇔ 球与角标在画面中 x 重合】，
- *   且该差值 e=x球−x角标 对纯旋转不变、只对平移收敛——故用全向底盘
- *   【横移】消差，再用原地踢转把已对齐的目标对居中（旋转不破坏共线）
- *   → PUSH 直线撞球，球自行滚向角标；同帧贴近 + 静止两帧确认到位
- *   → RETURN 按推进时长盲退回近似原位 → SURVEY 推下一球。
+ *   可恢复转圈搜索）→ ALIGN 利用车-球-角标三点共线的图像几何：
+ *   【共线 ⇔ 球与角标在画面中 x 重合】，且该差值 e=x球−x角标 对纯
+ *   旋转不变、只对平移收敛——故用全向底盘【横移】消差，再用原地踢转
+ *   把已对齐的目标对居中（旋转不破坏共线）；角标不可见时不连续直奔，
+ *   改为【脉冲式前进】接近球（走一步停一步看帧），球到近处仍无角标
+ *   则直推兜底 → PUSH 直线撞球，球自行滚向角标；同帧贴近 + 静止两帧
+ *   确认到位 → RETURN 按推进时长盲退回近似原位 → SURVEY 推下一球。
  *
- * 流程：GIMBAL_UP → SURVEY → APPROACH → ALIGN → PUSH → RETURN → …
+ * 流程：GIMBAL_UP → SURVEY → ALIGN → PUSH → RETURN → …
  *
  * 电机指令经 walking_direct_command() 下发（走正常三轴混控）。
  * ============================================================ */
@@ -27,8 +27,7 @@
 typedef enum {
     BALL_TASK_GIMBAL_UP = 0,   /* 抬云台并静置 */
     BALL_TASK_SURVEY,          /* 静止等摆球（或转圈搜索，见 SPIN_ENABLE） */
-    BALL_TASK_APPROACH,        /* 朝选定球开进，直到球到画面偏底部 */
-    BALL_TASK_ALIGN,           /* 三点一线对准（横移消差 + 踢转居中） */
+    BALL_TASK_ALIGN,           /* 对准：平移+旋转共线；无角标则脉冲前进 */
     BALL_TASK_PUSH,            /* 直线撞球推进 */
     BALL_TASK_RETURN,          /* 按推进时长盲退回近似原位 */
     BALL_TASK_DONE,            /* 双球完成（或超时兜底） */
@@ -47,25 +46,29 @@ typedef enum {
 /* 静止等球模式下（SPIN=0）：开局静置一小段让人工摆球确认；仍找不到
  * 待推球就缓慢向前蠕进（画面里没有球时边走边找），直到确认到球。 */
 #define BALL_SURVEY_CREEP_DELAY_MS  2000u  /* 静置时长，超过即开始蠕进 */
-#define BALL_SURVEY_CREEP_PCT       11     /* 蠕进速度（2026-09-03 实车 10 偏慢
-                                            * → 11；9% 是死区物理下限） */
+#define BALL_SURVEY_CREEP_PCT       12     /* 蠕进速度：11% 时 C 轮（×0.90 全局增益）
+                                            * 仅 9.9% 贴死区上沿（反馈文档分析），
+                                            * 提到 12 让 C 轮 10.8%；9% 是物理下限 */
 #define BALL_SURVEY_TURN_PCT       12      /* 搜索短转转速（SPIN=1 时） */
 #define BALL_SURVEY_BURST_MS       250u    /* 短转时长 */
 #define BALL_SURVEY_HOLD_MS        450u    /* 静止看帧时长 */
 
-/* ---- APPROACH：靠近选定球 ----
- * 远处球勉强可辨、角标不可见时先开进：y_ratio 0=画面顶、1=底，
- * 球到画面偏底部 = 车已到球近前（角标大概率同时入视野）。 */
-#define BALL_APPROACH_Y_TARGET      0.75f  /* 球心 y ≥ 此值 = 已靠近，进对准 */
-#define BALL_APPROACH_Y_ARRIVE_LOST 0.60f  /* 球出画时最后 y ≥ 此值 = 视为已到位
-                                            * （球滑出画面底部=贴到车头） */
-#define BALL_APPROACH_SPEED_PCT     11     /* 靠近巡航速度（起步共用强推缓降） */
-#define BALL_APPROACH_TIMEOUT_MS    15000u /* 靠近总超时（回 SURVEY） */
-
-/* ---- ALIGN：三点一线对准 ----
- * e = x球 − x角标。e 对纯旋转不变、只对平移收敛（几何推导见
- * ball_task.c 顶部）：e>0 = 球在角标右侧 = 连线在车右侧 → 右移。
- * ⚠️ BALL_ALIGN_STRAFE_SIGN 现场标定：若横移方向"越修越偏"改 -1。 */
+/* ---- ALIGN：对准（含无角标时的脉冲前进接近）----
+ * 有角标：平移消差 + 踢转居中，共线即进 PUSH（从远处直接推，推进中
+ * 持续微修）。无角标：脉冲式前进接近球（走一步停一步看帧），球到
+ * 近处（y≥BALL_NEAR_Y_TARGET）仍无角标则直推兜底。 */
+#define BALL_ALIGN_FWD_PCT         15      /* 脉冲前进速度（13 推不动、需手助推
+                                            * →15：A/C 轮 15/13.5% 双双越过死区） */
+#define BALL_ALIGN_FWD_MS          300u    /* 每个前进脉冲时长（180ms 克服不了
+                                            * 静摩擦；300ms×~12cm/s≈3.5cm/步） */
+/* 对准中球不可见（脉冲前进走过头、球进车头盲区）→ 脉冲式【倒车】找回，
+ * 直到球重回画面；连续倒车 2s（BALL_ALIGN_LOST_WAIT_MS）仍无 → SURVEY */
+#define BALL_ALIGN_BWD_PCT         12
+#define BALL_ALIGN_BWD_MS          250u
+/* 球"已近"判定（原 APPROACH 到位线；车体遮挡底部 30%，可见区 y≤0.70）：
+ * 无角标脉冲前进到此刻转直推；PUSH 丢球倒车重捕获也按此分流。 */
+#define BALL_NEAR_Y_TARGET         0.65f   /* 球心 y ≥ 此值 = 球已到车头近前 */
+#define BALL_NEAR_Y_ARRIVE_LOST    0.55f   /* 球出画时最后 y ≥ 此值 = 视为已近 */
 #define BALL_ALIGN_DEADBAND        0.06f   /* |e| 死区：以内视为三点共线 */
 #define BALL_ALIGN_STRAFE_PCT      12      /* 对准横移速度 */
 #define BALL_ALIGN_STRAFE_SIGN     (+1)
@@ -76,35 +79,68 @@ typedef enum {
 #define BALL_ALIGN_STRAFE_MAX_MS   250u    /* 最大脉冲（帧率约 3fps，留看帧余量） */
 #define BALL_ALIGN_CENTER_BAND     0.08f   /* 目标对居中死区（踢转消除） */
 #define BALL_ALIGN_EDGE_X          0.12f   /* 目标距画面边 <此值：先居中再横移 */
-#define BALL_ALIGN_KICK_TURN_PCT   13      /* 踢转转速（2026-09-03 实车 12→13；
-                                            * 12% 时后轮 B=8.2% 恰出力，13 更利落） */
-#define BALL_ALIGN_KICK_SCALE_MS   380u    /* 踢转时长 ≈ |偏差| × 此值 */
-#define BALL_ALIGN_KICK_MIN_MS     25u     /* 最小踢转（死区角度粒度） */
-#define BALL_ALIGN_KICK_MAX_MS     240u    /* 最大踢转 */
-#define BALL_ALIGN_TIMEOUT_MS      12000u  /* 对准总超时（回 SURVEY） */
+#define BALL_ALIGN_KICK_TURN_PCT   15      /* 踢转转速：15×0.68=10.2%（B 轮）明显
+                                            * 越过 9% 死区下限；14 及以下 B 轮
+                                            * 起不了转，实车只响不动 */
+#define BALL_ALIGN_KICK_SCALE_MS   260u    /* 踢转时长 ≈ |偏差| × 此值（380→260：
+                                            * 实车反馈转向过快过冲，减小单次转幅） */
+#define BALL_ALIGN_KICK_MIN_MS     100u    /* 最小踢转：25ms 电流刚建立脉冲就结束，
+                                            * 克服不了静摩擦（2026-09-03 反馈文档） */
+#define BALL_ALIGN_KICK_MAX_MS     160u    /* 最大踢转（240→160：限制单次摆角） */
+#define BALL_ALIGN_KICK_GAP_MS     250u    /* 两次踢转的最小间隔（用户要求：转向
+                                            * 全部脉冲化、间隔略大——踢完停够再评，
+                                            * 防连续小踢拼成连续原地转） */
+#define BALL_ALIGN_TIMEOUT_MS      20000u  /* 对准总超时（回 SURVEY；含远处对准
+                                            * 与脉冲前进接近，比纯对准耗时） */
 #define BALL_ALIGN_LOST_WAIT_MS    2000u   /* 对准中球不可见的等待上限（防对车
                                             * 底下的球干等；到点回 SURVEY） */
 
 /* ---- PUSH：直线撞球 ---- */
+#define BALL_MIN_EFFECTIVE_PCT     10.0f   /* 前轮有效出力下限（死区 9% + 余量）。
+                                            * 球任务内差速限幅用：turn 过大时
+                                            * 较慢一侧前轮会跌进死区"别住不走"，
+                                            * 故限 |turn| ≤ speed - 此值 */
 #define BALL_REALIGN_BACKUP_MS     400u    /* 撞球后球贴车头出画：先倒车一小段
                                             * 把球倒回视野再重新衔接（直接对准
                                             * 会对着车底干等，是"卡住"主因） */
 #define BALL_CTRL_PERIOD_MS         20u    /* ball_task_update 调用周期 */
-#define BALL_PUSH_SPEED_PCT         11     /* 巡航推速 */
-#define BALL_PUSH_LAUNCH_PCT        20     /* 起步强推档（防死区闷熄） */
+#define BALL_PUSH_SPEED_PCT         12     /* 巡航推速（2026-09-03 实车 13 过快→12，
+                                            * C 轮 10.8%；电池电压低时会更无力） */
+#define BALL_PUSH_LAUNCH_PCT        22     /* 起步强推档（防死区闷熄；20 无力→22） */
 #define BALL_PUSH_LAUNCH_MS         350u   /* 强推时长 */
 #define BALL_PUSH_RAMP_MS           600u   /* 强推→巡航线性缓降时长 */
-#define BALL_PUSH_STEER_GAIN        8.0f   /* 转向修正：x 偏差 → 转向 % */
+#define BALL_PUSH_STEER_GAIN        10.0f  /* 转向修正：x 偏差 → 转向 %
+                                            * （2026-09-03 实车 8 转弯无力→10） */
 #define BALL_PUSH_ALIGN_STRAFE_PCT  8      /* 推进中 e 偏差的横移微修力度 */
-#define BALL_PUSH_BLIND_MS          800u   /* 球滑出车头视野后的盲走窗口 */
+#define BALL_PUSH_BLIND_MS          500u   /* 球滑出车头视野后的盲走时长
+                                            * （2026-09-03 实车 800 跟进过远
+                                            * →500：撞击+让球自己滚，不推着走） */
 #define BALL_PUSH_TIMEOUT_MS        15000u /* 单球推球总超时 */
 #define BALL_TASK_DONE_CONFIRM_WAIT_MS 2000u /* 到位待确认超时（防摄像头卡死） */
+#define BALL_DONE_MIN_DRIVE_MS     800u   /* 到位判定前置条件：PUSH 已实际下发
+                                            * 推进 ≥ 此时长，防透视/框抖导致
+                                            * 刚进 PUSH 就"贴近"误判完成 */
+#define BALL_DONE_DIST_EPS         0.10f  /* 静止确认两帧间允许的距离增量。
+                                            * 2026-09-03 0.02→0.10：球被撞后是
+                                            * 滚动的，滚过角标瞬间距离增大，
+                                            * 旧守卫会漏判完成 → 车一路推过头 */
 #define BALL_MARKER_ADJACENT_ERR_X  0.15f  /* 球心与角标水平贴近 = 到位 */
 #define BALL_MARKER_ADJACENT_ERR_Y  0.15f  /* 纵向（深度）贴近；同帧双可见才判 */
 
+/* ---- 角标锁定（2026-09-03 反馈文档 P1；同日防横跳强化）----
+ * 双角标同视野时若每帧重选"离球最近"，检测抖动会让目标来回切换、
+ * e 跳变变号（左角标脱识→改追右角标→反向）。现规则：进 ALIGN 锁定
+ * 首个可见角标后【整个对准期间不换目标】；暂丢时由 ALIGN 同向滑行
+ * 踢转带回视野（COAST 参数如下），滑行超时停车等，不再重选。 */
+#define BALL_MARKER_MATCH_TOL      0.15f  /* 锁定角标的方位匹配容差 */
+#define BALL_ALIGN_COAST_MS        1200u  /* 锁定角标暂丢的同向滑行总时长 */
+#define BALL_ALIGN_COAST_KICK_MS   150u   /* 滑行单脚时长（带 250ms 间隔） */
+
 /* ---- RETURN：退回原位 ----
  * 无里程计，按 PUSH 期间的前进时长开环盲退（近似原位）。 */
-#define BALL_RETURN_SPEED_PCT       11     /* 盲退速度 */
+#define BALL_RETURN_SPEED_PCT       14     /* 盲退速度（2026-09-03 实车 11 倒不动
+                                            * ——C 轮 0.90 增益下仅 9.9% 贴死区，
+                                            * 与前进不起步同机制；14 → C 轮 12.6%） */
 #define BALL_RETURN_TIME_SCALE      1.1f   /* 退回时长 = 推进时长 × 此系数 */
 #define BALL_RETURN_MAX_MS          8000u  /* 盲退上限（推进时长异常兜底） */
 

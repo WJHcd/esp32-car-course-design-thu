@@ -32,7 +32,7 @@
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  *   7 = 摄像头纯巡线实车测试（无超声/避障；含弯道丢线原地恢复）
- *   8 = 找球/推球任务独立测试（等球→靠近→三点一线对准→撞球→退回）
+ *   8 = 找球/推球任务独立测试（等球→对准[无角标脉冲前进]→撞球→退回）
  *   9 = 红球/蓝球纯识别测试（不初始化电机，只显示完整画面与识别框）
  * ============================================================ */
 #define TASK2_MODE  8
@@ -289,8 +289,8 @@ void app_ball_task_test(void)
 
     printf("\n========== 找球/推球任务独立测试（MODE 8，三点一线法） ==========\n");
     printf("云台抬起后固定。SURVEY 静止等球 2s，没等到就缓慢前进找球 →\n");
-    printf("APPROACH 靠近到球占画面底部 → ALIGN 横移/踢转对准 → 撞球 → 退回。\n");
-    printf("摄像头画面同步显示在小车 TFT 屏上（约 3fps）。\n\n");
+    printf("ALIGN 对准（横移+踢转；无角标时脉冲前进接近）→ 撞球 → 退回。\n");
+    printf("摄像头画面同步显示在小车 TFT 屏上（约 6fps）。\n\n");
 
     /* 摄像头画面实时上屏：直观看摄像头视野里有什么 */
     camera_line_set_frame_cb(tft_st7735_show_camera_frame);
@@ -323,10 +323,15 @@ void app_ball_task_test(void)
 
         if (now_ms - last_print >= 500) {
             last_print = now_ms;
-            printf("[ball] cb=%lu state=%s 红(%d x=%+.2f a=%.3f) "
-                   "蓝(%d x=%+.2f a=%.3f) 角标%d\n",
+            /* F/T/S = 最近一次下发的前进/转向/平移指令（%），配合状态
+             * 可区分"死区别住"（指令非零车不动）与"到位主动停车" */
+            const walking_command_t cmd = walking_get_last_command();
+            printf("[ball] cb=%lu state=%s F=%+d T=%+d S=%+d "
+                   "红(%d x=%+.2f a=%.3f) 蓝(%d x=%+.2f a=%.3f) 角标%d\n",
                    (unsigned long)camera_line_frame_cb_count(),
                    ball_task_state_name(),
+                   cmd.forward_percent, cmd.turn_percent,
+                   cmd.strafe_percent,
                    balls.red_ball.detected, balls.red_ball.x_ratio,
                    balls.red_ball.area_ratio,
                    balls.blue_ball.detected, balls.blue_ball.x_ratio,
@@ -336,11 +341,11 @@ void app_ball_task_test(void)
         if (now_ms - last_ascii_ms >= 1000) {
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
-            uint32_t rp, up, gp;
-            ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &rp, &up, &gp);
+            uint32_t rp, up, bp;
+            ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &rp, &up, &bp);
             printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)rp, (unsigned long)up,
-                   (unsigned long)gp);
+                   (unsigned long)bp);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[view]\n%s", view);

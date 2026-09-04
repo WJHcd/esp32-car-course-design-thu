@@ -4,8 +4,8 @@
 /* ============================================================
  * 三色识别实现：逐像素分类 → 4× 降采样占用网格 → flood-fill
  * 连通域 → 形状过滤（宽高比/填充率）→ 每色取最大合格团块。
- * （2026-09-03：原黑球改红球，黑类移除、红色类改按球提取；
- *  角标定为绿色、独立建类提取。）
+ * （2026-09-03：原黑球改红球，红色类改按球提取；角标改为黑色纸板，
+ *  绿色独立建类提取（远端放宽），红球旁的 JPEG 绿边伪源由"红球邻域剔除"兜底。）
  *
  * 每帧成本：全帧像素分类 ~0.5ms + 三张 80x60 网格的 flood fill
  * （合计 <4800 格）≈ 0.1ms，远小于 JPEG 解码。
@@ -26,7 +26,7 @@ typedef struct {
 
 static color_grid_t s_grid_red;
 static color_grid_t s_grid_blue;
-static color_grid_t s_grid_green;
+static color_grid_t s_grid_marker;
 static char s_debug_ascii[(GRID_W_MAX / 2 + 2) * (GRID_H_MAX / 2 + 1)];
 static int s_diag_min, s_diag_max, s_diag_avg;   /* 中心区灰度诊断 */
 static uint32_t s_dbg_red_px, s_dbg_blue_px, s_dbg_green_px;
@@ -43,7 +43,7 @@ void ball_detect_init(int width, int height)
     if (s_grid_h < 1) s_grid_h = 1;
 }
 
-/* ---- 像素级颜色分类（蓝/红/绿依次判定；白场地高光不会被误收）---- */
+/* ---- 像素级颜色分类（蓝/红/黑依次判定；黑放最后防吃掉彩色暗部）---- */
 static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
 {
     if (b > BALL_BLUE_MIN_B && b - (r > g ? r : g) > BALL_BLUE_DELTA) {
@@ -82,7 +82,8 @@ static void erode_grid(color_grid_t *g)
     }
 }
 
-/* ---- 单色连通域提取：从占用网格里 flood fill 出所有合格团块 ---- */
+/* ---- 单色连通域提取：从占用网格里 flood fill 出所有合格团块 ----
+ * min_cells 由调用方传入（球 3 格；远端绿角标放宽到 2 格） */
 typedef struct {
     int count;          /* 格子数 */
     int sum_x, sum_y;   /* 格子坐标和（求质心） */
@@ -90,7 +91,8 @@ typedef struct {
 } blob_cells_t;
 
 static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
-                          int max_out, int *out_count, bool require_ball_shape)
+                          int max_out, int *out_count, bool require_ball_shape,
+                          int min_cells)
 {
     *out_count = 0;
     memset(g->stack, 0, sizeof(g->stack));
@@ -137,7 +139,7 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
 
             /* 形状过滤：紧凑球团 vs 细长赛道线/边界线。aspect 的定义
              * 恒 >=1，因此只需要上限；原来的 0.35 下限永远不会生效。 */
-            if (c.count < BALL_MIN_CELLS) continue;
+            if (c.count < min_cells) continue;
             const int bw = c.max_x - c.min_x + 1;
             const int bh = c.max_y - c.min_y + 1;
             const float aspect = (float)(bw > bh ? bw : bh) / (bw < bh ? bw : bh);
@@ -197,7 +199,7 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 {
     memset(&s_grid_red, 0, sizeof(s_grid_red));
     memset(&s_grid_blue, 0, sizeof(s_grid_blue));
-    memset(&s_grid_green, 0, sizeof(s_grid_green));
+    memset(&s_grid_marker, 0, sizeof(s_grid_marker));
 
     /* 逐像素分类并落到降采样网格。球的圆弧边缘、高光和 JPEG 色块
      * 会让格内颜色不纯，使用较低命中数保住小目标，噪声交给连通域
@@ -227,7 +229,9 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                 }
                 if (red   >= BALL_CELL_HIT_MIN) s_grid_red.occ[gy * cells_x + gx] = 1;
                 if (blue  >= BALL_CELL_HIT_MIN) s_grid_blue.occ[gy * cells_x + gx] = 1;
-                if (green >= BALL_CELL_HIT_MIN) s_grid_green.occ[gy * cells_x + gx] = 1;
+                /* 绿角标在远端成像极小：格内命中数单独放宽（3/16） */
+                if (green >= BALL_MARKER_CELL_HIT_MIN)
+                    s_grid_marker.occ[gy * cells_x + gx] = 1;
             }
         }
     }
@@ -247,7 +251,7 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                         const int idx = (gy + dy) * cells_x + gx + dx;
                         red   |= s_grid_red.occ[idx] != 0;
                         blue  |= s_grid_blue.occ[idx] != 0;
-                        green |= s_grid_green.occ[idx] != 0;
+                        green |= s_grid_marker.occ[idx] != 0;
                     }
                 }
                 *p++ = red ? 'R' : (blue ? 'L' : (green ? 'G' : '.'));
@@ -284,14 +288,55 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 
     memset(out, 0, sizeof(*out));
     int n;
-    extract_blobs(&s_grid_red, &out->red_ball, 1, &n, true);
-    extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, true);
-    /* 绿角标：绿色类无同色干扰源（红球/蓝球/蓝界线/黑线全部异色），
-     * 独立网格 + 宽松形状过滤（容纳远距离小块/细长反光），取前二。 */
+    extract_blobs(&s_grid_red, &out->red_ball, 1, &n, true, BALL_MIN_CELLS);
+    extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, true, BALL_MIN_CELLS);
+    /* 绿角标：绿色类是场上唯一绿色源，用宽松形状提取（无宽高比/填充率
+     * 门槛，容纳远端 1~3 格的小成像），最少格数单独放宽到 2，取前二。 */
     int marker_n = 0;
-    extract_blobs(&s_grid_green, out->marker, BALL_MARKER_MAX, &marker_n,
-                  false);
+    extract_blobs(&s_grid_marker, out->marker, BALL_MARKER_MAX, &marker_n,
+                  false, BALL_MARKER_MIN_CELLS);
     out->marker_count = (uint8_t)marker_n;
+
+    /* 球邻域剔除（红+蓝）：白底→彩色球的高对比边缘上，JPEG 压缩会
+     * 打出绿色镶边伪源、贴着球形成小块（蓝球被推到车头附近时尤其
+     * 明显——伪源出现在画面下部，曾被当成角标）。真角标远离球；
+     * 球推到角标旁时角标成像也远大于镶边块——因此只剔除"与球包围盒
+     * （膨胀 2 格）相交且较小（≤BALL_MARKER_FRINGE_MAX_CELLS 格）"
+     * 的候选，大块真角标保留，完成判定不受影响。 */
+    if (out->marker_count > 0) {
+        int bx0[2] = {0, 0}, bx1[2] = {0, 0}, by0[2] = {0, 0}, by1[2] = {0, 0};
+        int n_boxes = 0;
+        const ball_blob_t *ball_ref[2] = { &out->red_ball, &out->blue_ball };
+        for (int i = 0; i < 2; i++) {
+            if (!ball_ref[i]->detected) continue;
+            bx0[n_boxes] = (int)ball_ref[i]->x_min_px / BALL_GRID_DIV - 2;
+            bx1[n_boxes] = (int)(ball_ref[i]->x_min_px + ball_ref[i]->width_px)
+                           / BALL_GRID_DIV + 2;
+            by0[n_boxes] = (int)ball_ref[i]->y_min_px / BALL_GRID_DIV - 2;
+            by1[n_boxes] = (int)(ball_ref[i]->y_min_px + ball_ref[i]->height_px)
+                           / BALL_GRID_DIV + 2;
+            n_boxes++;
+        }
+        if (n_boxes > 0) {
+            uint8_t kept = 0;
+            for (uint8_t i = 0; i < out->marker_count; i++) {
+                const ball_blob_t *m = &out->marker[i];
+                const int mx0 = (int)m->x_min_px / BALL_GRID_DIV;
+                const int mx1 = (int)(m->x_min_px + m->width_px) / BALL_GRID_DIV;
+                const int my0 = (int)m->y_min_px / BALL_GRID_DIV;
+                const int my1 = (int)(m->y_min_px + m->height_px) / BALL_GRID_DIV;
+                bool hits_ball = false;
+                for (int b = 0; b < n_boxes && !hits_ball; b++) {
+                    hits_ball = (mx0 <= bx1[b] && mx1 >= bx0[b] &&
+                                 my0 <= by1[b] && my1 >= by0[b]);
+                }
+                if (!hits_ball || m->cell_count > BALL_MARKER_FRINGE_MAX_CELLS) {
+                    out->marker[kept++] = *m;
+                }
+            }
+            out->marker_count = kept;
+        }
+    }
 }
 
 void ball_detect_debug_ascii(char *out, int out_len)

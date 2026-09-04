@@ -472,7 +472,7 @@ static void processing_task(void *args)
         ball_detect_process_rgb888(rgb_buf, &s_ball_field);
 
         /* 识别结果叠加方框：红球黄框 / 蓝球绿框 / 角标紫框（显示色，
-         * 实物为绿色——紫框与绿框区分，避免与蓝球的绿框混淆）。
+         * 实物为绿色——紫框与蓝球的绿框区分不同目标））。
          * 球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
                       &s_ball_field.red_ball, 255, 255, 0);
