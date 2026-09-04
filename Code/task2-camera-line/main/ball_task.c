@@ -1,6 +1,7 @@
 #include "ball_task.h"
 #include "gimbal.h"
 #include "walking.h"
+#include "encoder.h"
 #include "esp_log.h"
 #include <math.h>
 #include <string.h>
@@ -54,21 +55,18 @@ static uint32_t s_last_ball_seen_ms;
 
 /* 对准/推球/退回状态（进状态时在 set_state 里复位） */
 static uint32_t s_kick_until_ms;         /* 本次踢转结束时刻（0=无踢转） */
-static uint32_t s_kick_cooldown_until;   /* 踢转冷却截止（脉冲间隔，防连续小踢
-                                            * 拼成连续原地转） */
 static int8_t s_kick_dir;                /* +1=右转 / -1=左转 */
 static float s_align_strafe;             /* 对准横移档（脉冲期间生效） */
 static uint32_t s_strafe_until_ms;       /* 本次横移脉冲结束时刻（0=无） */
-static float s_fwd_pct;                  /* 对准脉冲速度（带符号：+前进接近 /
-                                            * −倒车找回；0=无） */
-static uint32_t s_fwd_until_ms;          /* 本次前进/倒车脉冲截止（0=无） */
-static uint32_t s_coast_until_ms;        /* 锁定角标暂丢的同向滑行截止（0=无） */
+static uint32_t s_fwd_until_ms;          /* 对准无角标时的前进脉冲截止（0=无） */
 static uint32_t s_push_done_pending_ms;  /* 0 = 无待确认；非 0 = 到位待静止确认 */
 static float s_done_prev_dist;           /* 到位确认首帧的球-角标距离 */
 static uint32_t s_push_launch_start_ms;  /* 起步强推起点（0=无） */
 static uint32_t s_push_drive_ms;         /* PUSH 中前进指令累计时长（退回用） */
 static float s_push_steer_target;        /* 最近一次生效转向目标（盲区续用） */
 static uint32_t s_return_ms;             /* 本次退回计划时长 */
+static int32_t s_push_pulses;            /* PUSH 期间双前轮里程脉冲（退回目标） */
+static int32_t s_return_target_pulses;   /* 退回目标里程（0=按纯计时，重捕获用） */
 static bool s_return_recapture;          /* true=贴车头重捕获短倒车（时长已定，
                                             * set_state 不得按推进时长重算） */
 
@@ -96,16 +94,15 @@ static const ball_blob_t *pick_target_blob(const ball_field_result_t *b)
     return (s_current == TARGET_RED) ? &b->red_ball : &b->blue_ball;
 }
 
-/* 角标锁定跟踪（2026-09-03 反馈文档 P1；同日防横跳强化）：双角标同
- * 视野时每帧重选"离球最近"会因检测抖动来回切换、e 跳变变号（车左转
- * 时左角标脱识→改追右角标→反向，反复横跳）。现规则：进入 ALIGN 锁定
- * 首个可见角标，【整个对准/推球期间不换目标】；暂丢时不重选——由
- * ALIGN 的"同向滑行踢转"沿原方向把它带回视野（见 ALIGN 分支）。 */
+/* 角标锁定跟踪（2026-09-03 反馈文档 P1）：双角标同视野时每帧重选
+ * "离球最近"会因检测抖动来回切换、e 跳变变号。进入 ALIGN 锁定首个
+ * 可见角标的方位，此后按方位匹配同一目标；连续丢失若干帧才重选。 */
 static bool s_marker_lock_valid;
 static float s_marker_lock_x;
+static int s_marker_lock_lost;
 
 /* 取当前推球目标的角标（带锁定）：ref_x = 最近一次球方位。
- * 返回 NULL = 本帧无可用角标（锁定目标暂丢——不换目标，交给滑行）。 */
+ * 返回 NULL = 本帧无可用角标（含"锁定目标暂丢、不换目标"）。 */
 static const ball_blob_t *lock_or_pick_marker(const ball_field_result_t *b,
                                               float ref_x)
 {
@@ -132,16 +129,20 @@ static const ball_blob_t *lock_or_pick_marker(const ball_field_result_t *b,
         }
         if (locked != NULL && locked_dist <= BALL_MARKER_MATCH_TOL) {
             s_marker_lock_x = locked->x_ratio;   /* 跟踪刷新方位 */
+            s_marker_lock_lost = 0;
             return locked;
         }
-        /* 锁定目标本帧不可见：不换目标（另一侧角标绝不接手），返回
-         * NULL 交由 ALIGN 滑行/停车处理——这是防反复横跳的关键 */
-        return NULL;
+        /* 锁定目标本帧不可见：宁可不修正也不换目标，连续丢超限才放锁 */
+        if (++s_marker_lock_lost <= BALL_MARKER_HOLD_LOST_FRAMES) {
+            return NULL;
+        }
+        s_marker_lock_valid = false;
     }
 
     if (nearest != NULL) {
         s_marker_lock_valid = true;
         s_marker_lock_x = nearest->x_ratio;
+        s_marker_lock_lost = 0;
     }
     return nearest;
 }
@@ -177,28 +178,14 @@ static int clamp_turn_for_drive(float speed_pct, int turn)
 }
 
 /* 按偏差调度一次踢转（"踢一脚-看一帧"：时长随偏差缩小，越近越小步）。
- * off>0 = 目标在画面右侧 → 往右踢（+1）。
- * 带冷却期：踢完必须静置 BALL_ALIGN_KICK_GAP_MS 才允许下一脚——
- * 实车反馈连续小踢会拼成连续原地转、来回过冲。 */
+ * off>0 = 目标在画面右侧 → 往右踢（+1）。 */
 static void schedule_kick(float off, uint32_t now_ms)
 {
-    if (now_ms < s_kick_cooldown_until) return;
     uint32_t kick = (uint32_t)(fabsf(off) * BALL_ALIGN_KICK_SCALE_MS);
     if (kick < BALL_ALIGN_KICK_MIN_MS) kick = BALL_ALIGN_KICK_MIN_MS;
     if (kick > BALL_ALIGN_KICK_MAX_MS) kick = BALL_ALIGN_KICK_MAX_MS;
     s_kick_until_ms = now_ms + kick;
     s_kick_dir = (off > 0.0f) ? +1 : -1;
-    s_kick_cooldown_until = s_kick_until_ms + BALL_ALIGN_KICK_GAP_MS;
-}
-
-/* 按固定方向踢一脚（角标暂丢时的同向滑行用）：与 schedule_kick 共享
- * 冷却期，防滑行拼成连续旋转 */
-static void schedule_kick_dir(int8_t dir, uint32_t dur_ms, uint32_t now_ms)
-{
-    if (now_ms < s_kick_cooldown_until) return;
-    s_kick_until_ms = now_ms + dur_ms;
-    s_kick_dir = dir;
-    s_kick_cooldown_until = s_kick_until_ms + BALL_ALIGN_KICK_GAP_MS;
 }
 
 /* 按偏差调度一次横移脉冲（"移一脚-看一帧"：时长随 |e| 缩小，收敛线
@@ -226,33 +213,42 @@ static void set_state(ball_task_state_t st, uint32_t now_ms)
         s_push_launch_start_ms = now_ms;   /* 起步强推→缓降 */
         s_push_drive_ms = 0;
         s_push_steer_target = 0.5f;
+        encoder_odom_reset();              /* 推进里程从撞球起点起算 */
     } else if (st == BALL_TASK_RETURN) {
+        /* 结算推进里程并清零重新计（退回段里程）。里程只含 PUSH 段：
+         * 退回到的是"对准完成、开始撞球"的位置。 */
+        s_push_pulses = (encoder_odom_get(MOTOR_A) +
+                         encoder_odom_get(MOTOR_C)) / 2;
+        encoder_odom_reset();
         if (s_return_recapture) {
             /* 贴车头重捕获短倒车：时长已由调用方给定（400ms），
-             * 不得按推进时长重算（2026-09-03 反馈文档 P2） */
+             * 不得按推进时长重算（2026-09-03 反馈文档 P2）；按纯计时 */
             s_return_recapture = false;
+            s_return_target_pulses = 0;
         } else {
-            /* 推完一球退回原位：时长 = 推进累计时长 × 系数，上限兜底 */
+            /* 推完一球退回原位：里程目标 = 推进脉冲 × 系数（编码器实测，
+             * 死区/空转自动补偿）；计时保留为上限兜底 */
             uint32_t need = (uint32_t)((float)s_push_drive_ms * BALL_RETURN_TIME_SCALE);
             if (need < BALL_ALIGN_KICK_MIN_MS) need = BALL_ALIGN_KICK_MIN_MS;
             if (need > BALL_RETURN_MAX_MS) need = BALL_RETURN_MAX_MS;
             s_return_ms = need;
+            s_return_target_pulses =
+                (int32_t)((float)s_push_pulses * BALL_RETURN_PULSE_SCALE);
         }
-        ESP_LOGI(TAG, "倒车 %lu ms（%s）",
+        ESP_LOGI(TAG, "倒车 %lu ms（%s），里程目标 %ld 脉冲",
                  (unsigned long)s_return_ms,
-                 s_return_ms <= BALL_REALIGN_BACKUP_MS ? "重捕获" : "退回原位");
+                 s_return_ms <= BALL_REALIGN_BACKUP_MS ? "重捕获" : "退回原位",
+                 (long)s_return_target_pulses);
     } else if (st == BALL_TASK_ALIGN) {
         s_kick_until_ms = 0;       /* 等第一帧评估后再动作 */
-        s_kick_cooldown_until = 0;
         s_kick_dir = 0;
         s_align_strafe = 0;
         s_strafe_until_ms = 0;
-        s_fwd_pct = 0;
         s_fwd_until_ms = 0;
-        s_coast_until_ms = 0;
         s_last_ball_seen_ms = now_ms;   /* 无球等待窗从进对准起算 */
         /* 重新锁定角标：上一球的目标关系不再适用 */
         s_marker_lock_valid = false;
+        s_marker_lock_lost = 0;
     } else if (st == BALL_TASK_SURVEY) {
         /* 每轮等球重新计数确认帧——推完一球/对准超时回来时若沿用旧
          * 计数，会拿旧方位直接进对准 */
@@ -351,6 +347,9 @@ void ball_task_update(const camera_line_result_t *cam,
     if (new_frame) {
         s_last_frame_seq = cam->frame_seq;
     }
+    /* 喂里程计采样（内部 200ms 限速，20ms 周期调用无害；
+     * 未初始化编码器时为空转，RETURN 自动退回纯计时） */
+    encoder_update();
 
     if (task_timed_out(now_ms)) {
         walking_direct_command(0, 0, 0);
@@ -470,7 +469,6 @@ void ball_task_update(const camera_line_result_t *cam,
 
             if (ball_vis && marker != NULL) {
                 /* -- 主路径：球与角标同帧可见 -- */
-                s_coast_until_ms = 0;   /* 目标在视野：退出滑行 */
                 const float e = ball->x_ratio - marker->x_ratio;
                 const float pair_x = 0.5f * (ball->x_ratio + marker->x_ratio);
                 const float pair_off = pair_x - 0.5f;
@@ -508,23 +506,6 @@ void ball_task_update(const camera_line_result_t *cam,
                     s_align_strafe = 0;
                     schedule_kick(pair_off, now_ms);
                 }
-            } else if (ball_vis && s_marker_lock_valid) {
-                /* -- 锁定角标暂不可见（旋转把它带出画面/边缘抖动）：
-                 * 同向滑行踢转——沿丢前的转向方向继续小步踢（不换目标、
-                 * 不反向），把角标带回画面；滑行超时则停车等它。
-                 * 根治"左角标脱识→改追右角标→反向"的反复横跳。 -- */
-                s_align_strafe = 0;
-                s_fwd_pct = 0;
-                s_fwd_until_ms = 0;
-                if (s_coast_until_ms == 0) {
-                    s_coast_until_ms = now_ms + BALL_ALIGN_COAST_MS;
-                }
-                if (now_ms < s_coast_until_ms && s_kick_dir != 0) {
-                    schedule_kick_dir(s_kick_dir, BALL_ALIGN_COAST_KICK_MS,
-                                      now_ms);
-                } else {
-                    walking_direct_command(0, 0, 0);   /* 滑行超时：停车等 */
-                }
             } else if (ball_vis) {
                 /* -- 兜底：角标不可见（未摆/未识别）——脉冲式前进接近
                  * 球（走一步停一步看帧，不连续直奔），球到近处后即使
@@ -544,22 +525,16 @@ void ball_task_update(const camera_line_result_t *cam,
                 if (fabsf(ball->x_ratio - 0.5f) > 3.0f * BALL_ALIGN_CENTER_BAND) {
                     schedule_kick(ball->x_ratio - 0.5f, now_ms);
                 } else {
-                    s_fwd_pct = BALL_ALIGN_FWD_PCT;
                     s_fwd_until_ms = now_ms + BALL_ALIGN_FWD_MS;
                 }
             } else {
-                /* 本帧没球：大概率脉冲前进走过头、球进了车头盲区——
-                 * 脉冲式【倒车】找回，直到球重回画面；连续倒车
+                /* 本帧没球：脉冲式前进找球（沿最近一次球方位边走边微修，
+                 * 走一步停一步看帧），球重回画面即恢复对准；连续
                  * BALL_ALIGN_LOST_WAIT_MS 仍无 → SURVEY 兜底 */
                 s_align_strafe = 0;
                 s_kick_until_ms = 0;
                 s_strafe_until_ms = 0;
-                if (s_fwd_pct >= 0.0f) {
-                    ESP_LOGW(TAG, "%s 不可见，脉冲倒车找回",
-                             s_color_name[s_current]);
-                }
-                s_fwd_pct = -BALL_ALIGN_BWD_PCT;
-                s_fwd_until_ms = now_ms + BALL_ALIGN_BWD_MS;
+                s_fwd_until_ms = now_ms + BALL_ALIGN_FWD_MS;
             }
         }
 
@@ -577,16 +552,11 @@ void ball_task_update(const camera_line_result_t *cam,
         } else if (strafing) {
             walking_direct_command(0, 0, s_align_strafe);
         } else if (forwarding) {
-            if (s_fwd_pct > 0.0f) {
-                /* 前进脉冲带小幅差速（死区限幅），朝球方向边走边微修 */
-                const float off = s_seen[s_current].x_ratio - 0.5f;
-                const int turn = clamp_turn_for_drive(s_fwd_pct,
-                                                      (int)(off * BALL_PUSH_STEER_GAIN));
-                walking_direct_command(s_fwd_pct, turn, 0);
-            } else {
-                /* 倒车找回：直线盲退，不带转向（车头正对丢球方向） */
-                walking_direct_command(s_fwd_pct, 0, 0);
-            }
+            /* 前进脉冲带小幅差速（死区限幅），朝球方向边走边微修 */
+            const float off = s_seen[s_current].x_ratio - 0.5f;
+            const int turn = clamp_turn_for_drive(BALL_ALIGN_FWD_PCT,
+                                                  (int)(off * BALL_PUSH_STEER_GAIN));
+            walking_direct_command(BALL_ALIGN_FWD_PCT, turn, 0);
         } else {
             walking_direct_command(0, 0, 0);
         }
@@ -749,6 +719,17 @@ void ball_task_update(const camera_line_result_t *cam,
             break;
         }
 
+        /* 单球推进距离兜底：实际推进指令累计达上限（略微调小推球距离），
+         * 视为完成该球的尝试，退回换下一球 */
+        if (s_push_drive_ms >= BALL_PUSH_MAX_DRIVE_MS) {
+            walking_direct_command(0, 0, 0);
+            s_pending[s_current] = false;
+            ESP_LOGW(TAG, "%s 推进累计达 %u ms（限距兜底），按完成尝试处理",
+                     s_color_name[s_current], (unsigned)BALL_PUSH_MAX_DRIVE_MS);
+            after_ball_finished(now_ms);
+            break;
+        }
+
         /* 单球推球超时：视为完成该球的尝试，退回换下一球 */
         if (since_ms(now_ms, s_state_enter_ms) >= BALL_PUSH_TIMEOUT_MS) {
             walking_direct_command(0, 0, 0);
@@ -759,15 +740,24 @@ void ball_task_update(const camera_line_result_t *cam,
         break;
     }
 
-    case BALL_TASK_RETURN:
-        /* 按推进累计时长开环盲退（近似原位；无里程计的折中） */
+    case BALL_TASK_RETURN: {
+        /* 里程计退回：倒到"双前轮累计脉冲 ≥ 推进里程 × 系数"为止
+         * （死区/卡死不转时不计里程，自动多倒补偿）；计时为上限兜底，
+         * 重捕获短倒车 s_return_target_pulses=0，退化为纯计时。 */
         walking_direct_command(-BALL_RETURN_SPEED_PCT, 0, 0);
-        if (since_ms(now_ms, s_state_enter_ms) >= s_return_ms) {
+        const int32_t back_pulses = (encoder_odom_get(MOTOR_A) +
+                                     encoder_odom_get(MOTOR_C)) / 2;
+        const bool dist_done = (s_return_target_pulses > 0) &&
+                               (back_pulses >= s_return_target_pulses);
+        if (dist_done || since_ms(now_ms, s_state_enter_ms) >= s_return_ms) {
             walking_direct_command(0, 0, 0);
-            ESP_LOGI(TAG, "已退回原位附近，等待下一球");
+            ESP_LOGI(TAG, "退回结束（%ld/%ld 脉冲，%s），等待下一球",
+                     (long)back_pulses, (long)s_return_target_pulses,
+                     dist_done ? "里程到位" : "计时上限");
             set_state(BALL_TASK_SURVEY, now_ms);
         }
         break;
+    }
 
     case BALL_TASK_DONE:
     default:

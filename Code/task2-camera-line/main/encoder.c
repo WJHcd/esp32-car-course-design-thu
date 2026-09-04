@@ -4,6 +4,7 @@
 #include "esp_check.h"
 #include "esp_timer.h"
 #include <math.h>
+#include <string.h>
 
 /*
  * 每个轮胎转一整圈所对应的“编码器 A 相上升沿”数。
@@ -26,6 +27,7 @@ static const float s_encoder_ppr[MOTOR_NUM] = {
 
 static pcnt_unit_handle_t s_units[MOTOR_NUM];
 static encoder_rpm_t s_snapshot;
+static int32_t s_odom[MOTOR_NUM];
 static int64_t s_last_sample_us;
 static bool s_initialized;
 
@@ -64,6 +66,7 @@ void encoder_init(void)
     }
 
     s_snapshot = (encoder_rpm_t){0};
+    memset(s_odom, 0, sizeof(s_odom));
     s_last_sample_us = esp_timer_get_time();
     s_initialized = true;
 }
@@ -85,6 +88,8 @@ void encoder_update(void)
         ESP_ERROR_CHECK(pcnt_unit_get_count(s_units[i], &pulse_count));
         ESP_ERROR_CHECK(pcnt_unit_clear_count(s_units[i]));
 
+        s_odom[i] += (pulse_count < 0) ? -pulse_count : pulse_count;
+
         const float raw_rpm = fabsf((float)pulse_count) * 60000000.0f /
                               (s_encoder_ppr[i] * (float)elapsed_us);
         /* 显示端低通，降低低速时的脉冲量化抖动；不参与车辆控制。 */
@@ -100,4 +105,17 @@ void encoder_update(void)
 encoder_rpm_t encoder_get_rpm(void)
 {
     return s_snapshot;
+}
+
+void encoder_odom_reset(void)
+{
+    memset(s_odom, 0, sizeof(s_odom));
+}
+
+int32_t encoder_odom_get(int motor)
+{
+    if (motor < 0 || motor >= MOTOR_NUM) {
+        return 0;
+    }
+    return s_odom[motor];
 }

@@ -21,3 +21,14 @@ void encoder_update(void);
 
 /** 获取最近一次 RPM 快照。 */
 encoder_rpm_t encoder_get_rpm(void);
+
+/*
+ * 里程计：编码器累计脉冲（单相计数无方向，正反转都累加）。
+ * 由 encoder_update() 采样时累计——调用方需周期调用 encoder_update()
+ * （内部 200ms 限速，频繁调用无害；TFT 遥测任务也会调用）。
+ * 未标定 PPR 也可用：只用于"前进多少脉冲就退回多少脉冲"的相对里程。
+ */
+/** 里程计清零（进入某段行程时调用）。 */
+void encoder_odom_reset(void);
+/** 读某路累计脉冲（方向无关，恒非负）。 */
+int32_t encoder_odom_get(int motor);

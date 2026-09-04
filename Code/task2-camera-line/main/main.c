@@ -182,7 +182,7 @@ static void app_ball_detect_test(void)
 
     printf("\n========== 红球/蓝球纯识别测试（MODE 9） ==========\n");
     printf("电机未初始化，不会移动。TFT：红球黄框、蓝球绿框、绿角标紫框。\n");
-    printf("画面采用完整等比例缩放；白色横线下方是车体屏蔽区。\n\n");
+    printf("画面采用完整等比例缩放，左右边缘目标不会被裁掉。\n\n");
 
     uint32_t last_frame_seq = UINT32_MAX;
     uint32_t last_ascii_ms = 0;
@@ -208,13 +208,6 @@ static void app_ball_detect_test(void)
                    balls.blue_ball.width_px, balls.blue_ball.height_px,
                    (unsigned long)balls.blue_ball.cell_count,
                    balls.marker_count);
-            for (uint8_t i = 0; i < balls.marker_count; i++) {
-                const ball_blob_t *m = &balls.marker[i];
-                printf("[marker%u] x=%.3f y=%.3f box=%ux%u cells=%lu\n",
-                       (unsigned)i, (double)m->x_ratio, (double)m->y_ratio,
-                       m->width_px, m->height_px,
-                       (unsigned long)m->cell_count);
-            }
         }
 
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -222,21 +215,11 @@ static void app_ball_detect_test(void)
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
             uint32_t red_px, blue_px, green_px;
-            ball_marker_diag_t md;
             ball_detect_get_gray_diag(&gmn, &gmx, &gavg,
                                       &red_px, &blue_px, &green_px);
-            ball_detect_get_marker_diag(&md);
-            printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu "
-                   "绿格=%u 原候选=%u 形拒=%u 球边拒=%u 车体拒=%u "
-                   "待确认=%u 已确认=%u\n",
+            printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)red_px,
-                   (unsigned long)blue_px, (unsigned long)green_px,
-                   (unsigned)md.occupied_cells, (unsigned)md.raw_candidates,
-                   (unsigned)md.rejected_shape,
-                   (unsigned)md.rejected_ball_fringe,
-                   (unsigned)md.rejected_body_or_geometry,
-                   (unsigned)md.pending_tracks,
-                   (unsigned)md.confirmed_markers);
+                   (unsigned long)blue_px, (unsigned long)green_px);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[mask] R=红球 L=蓝球 G=角标 .=空白\n%s", view);
@@ -296,6 +279,7 @@ void app_ball_task_test(void)
     gimbal_init();
     walking_init();
     walking_set_output_enabled(true);
+    encoder_init();   /* RETURN 里程计退回用（编码器缺/失效时自动退纯计时） */
     tft_st7735_init();
     tft_st7735_set_camera_mode(true);
     /* 注意：不要 start_telemetry——遥测任务会用五行信息覆盖摄像头画面 */
@@ -359,17 +343,10 @@ void app_ball_task_test(void)
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
             uint32_t rp, up, bp;
-            ball_marker_diag_t md;
             ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &rp, &up, &bp);
-            ball_detect_get_marker_diag(&md);
-            printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu "
-                   "绿格=%u 候选=%u 车体拒=%u 待=%u 确认=%u\n",
+            printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)rp, (unsigned long)up,
-                   (unsigned long)bp, (unsigned)md.occupied_cells,
-                   (unsigned)md.raw_candidates,
-                   (unsigned)md.rejected_body_or_geometry,
-                   (unsigned)md.pending_tracks,
-                   (unsigned)md.confirmed_markers);
+                   (unsigned long)bp);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[view]\n%s", view);
