@@ -378,6 +378,20 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
     }
 }
 
+/* 找球调试辅助线：线下方为车体屏蔽区，不参与三色分类。画线发生在
+ * 检测完成之后，只影响 TFT 预览，不会污染本帧识别。 */
+static void draw_ball_roi_boundary(uint8_t *rgb, int w, int h)
+{
+    int y = h - h * BALL_DETECT_Y_BOTTOM_PCT / 100;
+    if (y < 1 || y >= h - 1) return;
+    for (int x = 0; x < w; x += 2) {
+        for (int k = 0; k < 2 && x + k < w; k++) {
+            uint8_t *p = rgb + ((size_t)y * w + x + k) * 3;
+            p[0] = 255; p[1] = 255; p[2] = 255;
+        }
+    }
+}
+
 /* ============================================================
  * 图像处理任务：MJPEG 解码 → 黑线检测
  * ============================================================ */
@@ -482,6 +496,7 @@ static void processing_task(void *args)
             draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
                           &s_ball_field.marker[i], 255, 0, 255);
         }
+        draw_ball_roi_boundary(rgb_buf, jpeg_out.width, jpeg_out.height);
 
         /* 帧回调挪到识别与叠加之后：TFT 显示的是带识别框的画面 */
         if (s_frame_cb) {

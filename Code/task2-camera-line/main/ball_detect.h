@@ -15,10 +15,8 @@
  *   - 蓝球与"禁止放球区"蓝色边界线同色，全局质心法会被线污染
  *     （质心落在两者之间）；连通域的形状指标（宽高比/填充率）能
  *     干净地区分"紧凑球团"与"细长线段"；
- *   - 绿角标：绿色是场上唯一绿色源，可大幅放宽阈值。角标在场地
- *     【最远端】，成像只有 1~3 格——专门放宽：格内命中数降为 3/16、
- *     最少占用格数降为 2、宽松形状提取；角标旁的 JPEG 绿边伪源
- *     由"红球邻域剔除"兜底（见 ball_detect.c）。
+ *   - 绿角标：远端成像很小，使用独立 2x2 网格和跨帧位置确认；颜色
+ *     门槛保持宽松以保证召回率，车体误检由空间/形状/时序规则排除。
  *
  * 输出（每帧）：
  *   red_ball  : 红球（最大合格连通域）
@@ -60,16 +58,35 @@
 #define BALL_MAX_BOX_WIDTH_PCT  55     /* 过大的色区/线段区域不作为球 */
 #define BALL_MAX_BOX_HEIGHT_PCT 70
 
-#define BALL_MARKER_MAX         2      /* 绿角标最多输出两个 */
-/* 远端角标专用放宽（角标在场地最远端、成像只有 1~3 格）：
- * 格内命中数红/蓝仍用 BALL_CELL_HIT_MIN，绿色降为 3/16；
- * 提取的最少占用格数降为 2、宽松形状（绿色类场上无同色源）。 */
-#define BALL_MARKER_CELL_HIT_MIN 3
-#define BALL_MARKER_MIN_CELLS    2
+#define BALL_MARKER_MAX          2      /* 最终输出的绿角标最多两个 */
+/* 绿角标单独使用 2x2 网格：远端目标只有数个像素时，4x4 网格会把它
+ * 压成单格并被面积门槛丢弃。1/4 像素命中即可形成原始候选，误检由
+ * 后面的形状、车体区域和跨帧确认过滤，而不是牺牲远端召回率。 */
+#define BALL_MARKER_GRID_DIV     2
+#define BALL_MARKER_CELL_HIT_MIN 1
+#define BALL_MARKER_MIN_CELLS    1
+#define BALL_MARKER_RAW_MAX      8      /* 先保留更多原始候选，防车体挤掉远端小目标 */
+
+/* 绿色候选几何/时序过滤。小候选允许不完整，但需更多确认帧；较大候选
+ * 应近似二维色块，拒绝 1xN 细线。新轨迹只在非车体区建立，已从远处
+ * 锁定的真角标仍可继续跟踪到更靠下的位置。 */
+#define BALL_MARKER_SMALL_MAX_CELLS       3
+#define BALL_MARKER_SMALL_CONFIRM_FRAMES  3
+#define BALL_MARKER_CONFIRM_FRAMES        2
+#define BALL_MARKER_TRACK_MAX             6
+#define BALL_MARKER_TRACK_MAX_MISSES      4
+#define BALL_MARKER_TRACK_MATCH_X         0.12f
+#define BALL_MARKER_TRACK_MATCH_Y         0.12f
+#define BALL_MARKER_NEW_TRACK_Y_MAX       0.62f
+#define BALL_MARKER_BELOW_BALL_TOL        0.05f
+#define BALL_MARKER_ASPECT_MAX            4.0f
+#define BALL_MARKER_FILL_MIN              0.22f
+#define BALL_MARKER_MAX_BOX_WIDTH_PCT     55
+#define BALL_MARKER_MAX_BOX_HEIGHT_PCT    45
 /* 球邻域伪源剔除的尺寸上限：与球包围盒相交且 ≤ 此格数的绿候选视为
  * JPEG 镶边伪源剔除；更大的块视为真角标保留（球推到角标旁时角标
  * 成像远大于此，完成判定不受影响）。 */
-#define BALL_MARKER_FRINGE_MAX_CELLS 6
+#define BALL_MARKER_FRINGE_MAX_CELLS 12
 
 /* ---- 检测区域 ----
  * 画面底部此百分比【不参与找球识别】：云台 35° 抬起时车头/车身自身
@@ -99,6 +116,19 @@ typedef struct {
     uint8_t marker_count;
 } ball_field_result_t;
 
+/* 绿色终点检测分级诊断。用于区分“颜色像素没命中”和“候选在空间/
+ * 时序过滤中被拒”，不参与控制。 */
+typedef struct {
+    uint32_t raw_green_pixels;
+    uint16_t occupied_cells;
+    uint8_t raw_candidates;
+    uint8_t rejected_shape;
+    uint8_t rejected_ball_fringe;
+    uint8_t rejected_body_or_geometry;
+    uint8_t pending_tracks;
+    uint8_t confirmed_markers;
+} ball_marker_diag_t;
+
 /**
  * @brief 初始化找球识别（记录图像尺寸，静态分配网格）
  */
@@ -120,3 +150,6 @@ void ball_detect_debug_ascii(char *out, int out_len);
 void ball_detect_get_gray_diag(int *mn, int *mx, int *avg,
                                uint32_t *red_px, uint32_t *blue_px,
                                uint32_t *green_px);
+
+/** @brief 获取最近一帧绿色终点分级诊断。 */
+void ball_detect_get_marker_diag(ball_marker_diag_t *out);
