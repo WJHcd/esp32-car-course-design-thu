@@ -5,8 +5,8 @@
 /* ============================================================
  * 三色识别实现：逐像素分类 → 4× 降采样占用网格 → flood-fill
  * 连通域 → 形状过滤（宽高比/填充率）→ 每色取最大合格团块。
- * （2026-09-04：绿角标改"归一化过量绿 nExG 比例判据 + 候选位置
- *  跨帧确认"，解决远端淡绿与放宽误检的两难；
+ * （绿角标使用明显绿/浅黄绿双通道 + 候选位置跨帧确认；
+ *  nExG 作为格内得分，不宣称对白底混色不变；
  *  红/蓝球沿用既有绝对差判据与实车标定。）
  *
  * 每帧成本：全帧像素分类 ~0.5ms + 三张 80x60 网格的 flood fill
@@ -71,15 +71,21 @@ static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
     return 0;
 }
 
-/* ---- 绿色得分（角标）：归一化过量绿 nExG×100，不过线返回 0 ----
- * 比例判据对亮度和白底稀释不变（依据见 ball_detect.h 标定区注释）。 */
+/* 绿色/荧光黄绿双通道。弱色度要求 R 明显高于 B，不能仅靠 G 偏高。
+ * 保留高亮浅色；完全过曝或与银色具有相同 RGB 时无法仅凭颜色区分。 */
 static inline uint8_t green_score(uint8_t r, uint8_t g, uint8_t b)
 {
     const int sum = (int)r + g + b;
     if (sum < BALL_GREEN_SUM_MIN) return 0;
     if ((int)g - ((int)r > (int)b ? r : b) < BALL_GREEN_DELTA_MIN) return 0;
+    const int min_rb = r < b ? r : b;
+    const int span = (int)g - min_rb;
+    const bool strong = span * 100 >= BALL_GREEN_STRONG_CHROMA_PCT * (int)g;
+    const bool pale = (int)g - b >= BALL_GREEN_PALE_SPAN_MIN &&
+        span * 100 >= BALL_GREEN_PALE_CHROMA_PCT * (int)g &&
+        (int)r > b && 2 * ((int)r - b) >= (int)g - r;
+    if (!strong && !pale) return 0;
     const int exg = 2 * (int)g - (int)r - (int)b;
-    if (exg * 100 < BALL_GREEN_NEXG_MIN * sum) return 0;
     const int score = exg * 100 / sum;
     return score > BALL_GREEN_SCORE_MAX ? BALL_GREEN_SCORE_MAX : (uint8_t)score;
 }
@@ -232,12 +238,10 @@ static bool marker_shape_ok(const ball_blob_t *m)
         m->height_px * 100 > s_height * BALL_MARKER_MAX_BOX_HEIGHT_PCT) {
         return false;
     }
-    if (m->cell_count <= BALL_MARKER_SMALL_MAX_CELLS) {
-        return true;    /* 远端小目标交给连续帧确认，不在单帧过度过滤 */
-    }
     const int bw = m->width_px / BALL_GRID_DIV;
     const int bh = m->height_px / BALL_GRID_DIV;
-    if (bw < 2 || bh < 2) return false;
+    /* 地面远目标可被透视压成单行；统一宽高比规则，不能在第4格
+     * 突然增加最小高度门槛。小目标仍须跨帧确认。 */
     const float aspect = (float)(bw > bh ? bw : bh) /
                          (float)(bw < bh ? bw : bh);
     const float fill = (float)m->cell_count / (float)(bw * bh);
@@ -346,7 +350,8 @@ static void update_marker_tracks(const ball_blob_t *raw, int raw_n,
             }
         } else {
             if (track->misses < UINT8_MAX) track->misses++;
-            if (!track->confirmed) track->hits = 0;
+            track->hits = 0;
+            track->confirmed = false; /* 中断后重新连续确认，禁止继承旧资格 */
             if (track->misses > BALL_MARKER_TRACK_MAX_MISSES) {
                 memset(track, 0, sizeof(*track));
             }
@@ -366,6 +371,14 @@ static void update_marker_tracks(const ball_blob_t *raw, int raw_n,
             if (!s_marker_tracks[t].active) {
                 free_slot = t;
                 break;
+            }
+        }
+        if (free_slot < 0) {
+            /* 旧位置短暂保留用于关联，但不能占满轨迹池挡住新终点。 */
+            for (int t = 0; t < BALL_MARKER_TRACK_MAX; t++) {
+                if (!s_marker_tracks[t].matched_this_frame &&
+                    (free_slot < 0 || s_marker_tracks[t].misses >
+                     s_marker_tracks[free_slot].misses)) free_slot = t;
             }
         }
         if (free_slot < 0) continue;
@@ -390,8 +403,8 @@ static void update_marker_tracks(const ball_blob_t *raw, int raw_n,
             }
             continue;
         }
-        const uint32_t score = (uint32_t)track->hits * 65536u +
-                               track->blob.cell_count;
+        /* 连续确认只是准入条件；寿命不参与排序，避免旧假目标压住真目标。 */
+        const uint32_t score = track->blob.cell_count;
         int slot = -1;
         if (field->marker_count < BALL_MARKER_MAX) {
             slot = field->marker_count++;
@@ -432,7 +445,7 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
     const int y_max = s_height - s_height * BALL_DETECT_Y_BOTTOM_PCT / 100;
     for (int gy = 0; gy < cells_y; gy++) {
         for (int gx = 0; gx < cells_x; gx++) {
-            int red = 0, blue = 0, green_sum = 0;
+            int red = 0, blue = 0, green_sum = 0, green_hits = 0;
             for (int py = 0; py < BALL_GRID_DIV; py++) {
                 const int y = gy * BALL_GRID_DIV + py;
                 if (y >= s_height || y >= y_max) break;
@@ -448,7 +461,7 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                     }
                     const uint8_t gs = green_score(p[0], p[1], p[2]);
                     green_sum += gs;
-                    if (gs) tot_green++;
+                    if (gs) { tot_green++; green_hits++; }
                 }
             }
             const int idx = gy * cells_x + gx;
@@ -456,7 +469,8 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
             if (blue >= BALL_CELL_HIT_MIN) s_grid_blue.occ[idx] = 1;
             /* 每帧独立产生绿色格，时序确认在候选轨迹层完成。这样小车
              * 运动时终点换格不会留下旧位置 IIR 残影。 */
-            if (green_sum >= BALL_MARKER_CELL_SCORE_MIN) {
+            if (green_sum >= BALL_MARKER_CELL_SCORE_MIN &&
+                green_hits >= BALL_MARKER_CELL_HIT_MIN) {
                 s_grid_marker.occ[idx] = 1;
                 if (s_marker_diag.occupied_cells < UINT16_MAX) {
                     s_marker_diag.occupied_cells++;

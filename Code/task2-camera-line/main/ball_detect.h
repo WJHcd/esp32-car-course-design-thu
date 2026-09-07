@@ -15,7 +15,7 @@
  *   - 蓝球与"禁止放球区"蓝色边界线同色，全局质心法会被线污染
  *     （质心落在两者之间）；连通域的形状指标（宽高比/填充率）能
  *     干净地区分"紧凑球团"与"细长线段"；
- *   - 绿角标：归一化过量绿（nExG）比例判据，对亮度和白底稀释不变；
+ *   - 绿角标：明显绿色与荧光黄绿色双通道；白底混色会降低色度，
  *     每帧先独立生成候选，再按目标位置跨帧确认。禁止在固定屏幕格上
  *     长期 IIR，因为小车运动时真终点会换格，旧位置反而留下残影。
  *
@@ -40,17 +40,15 @@
 #define BALL_BLUE_MIN_B         50     /* 蓝：B 通道最小值（暗光下调低） */
 #define BALL_BLUE_DELTA         20     /* 蓝：B 需比 max(R,G) 高出的差值 */
 
-/* 绿角标：归一化过量绿（nExG）比例判定（2026-09-04 调研后重构）。
- * 旧判据"G>阈值 且 G−max(R,B)>差值"是绝对量：角标在远端只占几像素，
- * 每个像素都是绿纸+白底的混合，绝对差随覆盖率线性衰减（实拍均值
- * RGB≈(134,158,102)：纯纸 G−max=24，25% 覆盖率时只剩 5）——收紧就漏
- * 远端淡绿、放宽又吃进暗区伪绿，两难无解。
- * 比例判据 nExG=(2G−R−B)/(R+G+B) 对亮度和白底稀释天然不变：
- * 实拍纯纸 0.20~0.25、25% 稀释仍有 0.03；白墙/地板/灰影 ≤0.01。
- * 配套两道守卫：亮度下限（暗区比例不可靠）+ 最小绝对差（防噪声抖动）。 */
-#define BALL_GREEN_NEXG_MIN       3      /* nExG×100 下限（3 = 0.03） */
+/* 现场目标是荧光浅绿色，不要求颜色深，也不限制亮度上限。
+ * 强色度通道兼容普通绿；弱色度通道要求黄绿方向 R>B，避免银灰色
+ * 仅 G 略高就命中。以下为待原始摄像头图像标定的初值，不是实测值。
+ * nExG 仅用于格内得分；它对白底混色并不保持不变。 */
 #define BALL_GREEN_SUM_MIN        200    /* 亮度下限 R+G+B */
 #define BALL_GREEN_DELTA_MIN      2      /* G−max(R,B) 最小绝对差 */
+#define BALL_GREEN_STRONG_CHROMA_PCT 12  /* (max-min)/max，明显绿色 */
+#define BALL_GREEN_PALE_CHROMA_PCT    4  /* 浅黄绿允许较低色度 */
+#define BALL_GREEN_PALE_SPAN_MIN      8  /* G-B，阻止近乎白/灰的量化噪声 */
 #define BALL_GREEN_SCORE_MAX      63     /* 单像素得分上限（nExG×100 截断） */
 
 /* ---- 连通域形状过滤 ----
@@ -67,6 +65,7 @@
 
 #define BALL_MARKER_MAX         2      /* 绿角标最多输出两个 */
 #define BALL_MARKER_CELL_SCORE_MIN       8
+#define BALL_MARKER_CELL_HIT_MIN         3 /* 不能靠一个高分像素点亮整格 */
 #define BALL_MARKER_MIN_CELLS             1
 #define BALL_MARKER_RAW_MAX               8
 #define BALL_MARKER_SMALL_MAX_CELLS       3
