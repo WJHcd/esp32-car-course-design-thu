@@ -290,8 +290,9 @@ static bool marker_is_ball_fringe(const ball_blob_t *m,
 static bool marker_plausible_with_ball(const ball_blob_t *m,
                                        const ball_field_result_t *field)
 {
-    /* 黑色干扰太多，终点不再允许脱离球单独成立。它必须位于至少一个
-     * 可见球的后方（图像中更上方，近距离遮挡留少量容差）。 */
+    /* 检测层允许终点独立出框，便于 MODE9 标定，也避免球偶发漏一帧
+     * 使终点轨迹清零。控制层仍要求球和终点同帧可见才允许车辆运动。
+     * 有球时继续约束终点在球后方（近距离遮挡留少量容差）。 */
     const ball_blob_t *visible[2] = { &field->red_ball, &field->blue_ball };
     bool any_ball = false;
     bool plausible = false;
@@ -302,7 +303,7 @@ static bool marker_plausible_with_ball(const ball_blob_t *m,
             plausible = true;
         }
     }
-    return any_ball && plausible;
+    return !any_ball || plausible;
 }
 
 static bool marker_can_start_track(const ball_blob_t *m,
@@ -517,7 +518,7 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
             const int idx = gy * cells_x + gx;
             if (red  >= BALL_CELL_HIT_MIN) s_grid_red.occ[idx] = 1;
             if (blue >= BALL_CELL_HIT_MIN) s_grid_blue.occ[idx] = 1;
-            /* 黑终点格内要求至少半数像素为黑；时序确认在候选轨迹层。 */
+            /* 黑终点格内允许边缘混入白底；时序确认在候选轨迹层。 */
             if (marker_black >= BALL_MARKER_CELL_HIT_MIN) {
                 s_grid_marker.occ[idx] = 1;
                 if (s_marker_diag.occupied_cells < UINT16_MAX) {

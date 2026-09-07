@@ -40,12 +40,12 @@
 #define BALL_BLUE_MIN_B         50     /* 蓝：B 通道最小值（暗光下调低） */
 #define BALL_BLUE_DELTA         20     /* 蓝：B 需比 max(R,G) 高出的差值 */
 
-/* 黑终点应明显低于巡线使用的 120 灰度阈值。105 是保守初值，避免普通
- * 阴影被收进来；现场应依据未叠框的原始相机帧复标。 */
-#define BALL_MARKER_BLACK_GRAY_MAX       105
-#define BALL_MARKER_CELL_HIT_MIN           8 /* 4x4 格至少半数像素为黑 */
-#define BALL_MARKER_SURROUND_GRAY_MIN     155 /* 外围白色地面灰度下限 */
-#define BALL_MARKER_SURROUND_LIGHT_PCT     55 /* 外围至少 55% 为亮地面 */
+/* 黑终点不高于巡线使用的 120 灰度阈值。115 是放宽后的初值；
+ * 现场仍应依据未叠框的原始相机帧复标。 */
+#define BALL_MARKER_BLACK_GRAY_MAX       115
+#define BALL_MARKER_CELL_HIT_MIN           6 /* 4x4 格允许远端边缘混入白底 */
+#define BALL_MARKER_SURROUND_GRAY_MIN     145 /* 允许地板阴影和曝光波动 */
+#define BALL_MARKER_SURROUND_LIGHT_PCT     40 /* 外围至少 40% 为亮地面 */
 #define BALL_MARKER_SURROUND_MARGIN_CELLS   2 /* 包围盒外采样 8px */
 
 /* ---- 连通域形状过滤 ----
@@ -64,16 +64,16 @@
 #define BALL_MARKER_MIN_CELLS              4 /* 至少形成二维小块 */
 #define BALL_MARKER_RAW_MAX               16 /* 防大黑线提前挤掉真候选 */
 #define BALL_MARKER_SMALL_MAX_CELLS        8
-#define BALL_MARKER_SMALL_CONFIRM_FRAMES   4
-#define BALL_MARKER_CONFIRM_FRAMES         3
+#define BALL_MARKER_SMALL_CONFIRM_FRAMES   3
+#define BALL_MARKER_CONFIRM_FRAMES         2
 #define BALL_MARKER_TRACK_MAX             6
 #define BALL_MARKER_TRACK_MAX_MISSES      4
 #define BALL_MARKER_TRACK_MATCH_X         0.12f
 #define BALL_MARKER_TRACK_MATCH_Y         0.12f
-#define BALL_MARKER_NEW_TRACK_Y_MIN       0.12f /* 极上方多为场外背景 */
-/* 新目标只能在上方 60% 建立，阻止车壳建立假轨迹；已经从远处确认的
- * 真实终点可继续跟踪到统一的 y=0.70 底部识别边界。 */
-#define BALL_MARKER_NEW_TRACK_Y_MAX       0.60f
+#define BALL_MARKER_NEW_TRACK_Y_MIN       0.05f /* 极上方仍视为场外背景 */
+/* 新目标可在画面 5%~68% 建立，兼容摄像头视角下调；底部 30% 硬屏蔽
+ * 仍阻止车壳建立假轨迹，已确认终点可跟踪到 y=0.70 识别边界。 */
+#define BALL_MARKER_NEW_TRACK_Y_MAX       0.68f
 #define BALL_MARKER_BELOW_BALL_TOL        0.08f
 #define BALL_MARKER_ASPECT_MAX            3.0f
 #define BALL_MARKER_FILL_MIN              0.55f

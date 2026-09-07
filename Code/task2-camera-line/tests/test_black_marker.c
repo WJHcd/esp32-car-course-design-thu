@@ -35,9 +35,9 @@ static void frames(int n)
 
 int main(void)
 {
-    /* 10cm 实心黑终点：在浅色地面、球后方，连续 3 帧确认。 */
+    /* 10cm 实心黑终点：在浅色地面、球后方，连续 2 帧确认。 */
     reset(); add_red_ball(); rect(100, 40, 24, 20, 35, 35, 35);
-    frames(2); assert(field.marker_count == 0);
+    frames(1); assert(field.marker_count == 0);
     frames(1);
     if (field.marker_count != 1) {
         ball_marker_diag_t d;
@@ -52,9 +52,20 @@ int main(void)
     }
     assert(field.marker_count == 1);
 
-    /* 无球时黑物体绝不能独自成为终点并驱动车辆。 */
+    /* 检测层允许无球时独立出框；控制层仍不会无球开车。 */
     reset(); rect(100, 40, 24, 20, 35, 35, 35);
-    frames(5); assert(field.marker_count == 0);
+    frames(2); assert(field.marker_count == 1);
+
+    /* 放宽后的 115 灰度可识别；远端 8x8 小块需连续 3 帧。 */
+    reset(); rect(100, 40, 24, 20, 115, 115, 115);
+    frames(2); assert(field.marker_count == 1);
+    reset(); rect(100, 40, 8, 8, 35, 35, 35);
+    frames(2); assert(field.marker_count == 0);
+    frames(1); assert(field.marker_count == 1);
+
+    /* 向下微调后的视角：新目标在 60% 以下仍可建立，底部 30% 不变。 */
+    reset(); rect(100, 92, 24, 16, 35, 35, 35);
+    frames(2); assert(field.marker_count == 1);
 
     /* 巡线、拐角、触边场外物体和过大桌面均应被过滤。 */
     reset(); add_red_ball(); rect(30, 45, 150, 4, 25, 25, 25);
@@ -72,7 +83,7 @@ int main(void)
     reset(); add_red_ball(); rect(84, 24, 56, 52, 130, 130, 130);
     rect(100, 40, 24, 20, 25, 25, 25);
     frames(5); assert(field.marker_count == 0);
-    reset(); add_red_ball(); rect(100, 40, 24, 20, 115, 115, 115);
+    reset(); add_red_ball(); rect(100, 40, 24, 20, 125, 125, 125);
     frames(5); assert(field.marker_count == 0);
 
     /* 位于球下方的黑块不符合“球在车与终点之间”。 */
