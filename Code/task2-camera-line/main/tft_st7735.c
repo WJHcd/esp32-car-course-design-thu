@@ -192,6 +192,15 @@ static void tft_draw_text(uint16_t x, uint16_t y, const char *text, uint16_t col
 
 void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_h)
 {
+    /* TFT 只需供人观察，不应拖慢每一帧视觉决策。屏幕限制为 4fps；
+     * 被跳过的帧不会占用 SPI/互斥锁。 */
+    static TickType_t s_last_camera_draw_tick;
+    const TickType_t now_tick = xTaskGetTickCount();
+    if (s_last_camera_draw_tick != 0 &&
+        now_tick - s_last_camera_draw_tick < pdMS_TO_TICKS(TFT_REFRESH_MS)) {
+        return;
+    }
+
     if (s_spi == NULL || !s_camera_mode || rgb888 == NULL ||
         frame_w <= 0 || frame_h <= 0 || s_draw_mutex == NULL) {
         return;
@@ -206,6 +215,7 @@ void tft_st7735_show_camera_frame(const uint8_t *rgb888, int frame_w, int frame_
         xSemaphoreGive(s_draw_mutex);
         return;
     }
+    s_last_camera_draw_tick = now_tick;
 
     /* 完整画面等比例缩放（letterbox），不再裁掉左右两侧目标。
      * ⚠️ 显示层水平镜像（2026-09-03）：检测/误差链路保持 CAM_FLIP_X=1

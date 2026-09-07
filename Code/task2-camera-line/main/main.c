@@ -32,7 +32,7 @@
  *   5 = 摄像头画面预览（摄像头画面实时显示到 TFT，确认摄像头好坏）
  *   6 = 摄像头ASCII预览（每秒打印 64x24 字符画到串口，'#'=判黑像素）
  *   7 = 摄像头纯巡线实车测试（无超声/避障；含弯道丢线原地恢复）
- *   8 = 找球/推球任务独立测试（等球→对准[无角标脉冲前进]→撞球→退回）
+ *   8 = 找球/推球任务独立测试（等球→球/终点对准→分段推球→退回）
  *   9 = 红球/蓝球纯识别测试（不初始化电机，只显示完整画面与识别框）
  * ============================================================ */
 #define TASK2_MODE  8
@@ -187,10 +187,10 @@ static void app_ball_detect_test(void)
     uint32_t last_frame_seq = UINT32_MAX;
     uint32_t last_ascii_ms = 0;
     while (true) {
-        camera_line_result_t cam;
-        ball_field_result_t balls;
-        camera_line_get(&cam);
-        camera_line_get_ball(&balls);
+        camera_observation_t obs;
+        camera_line_get_observation(&obs);
+        const camera_line_result_t cam = obs.line;
+        const ball_field_result_t balls = obs.balls;
 
         if (cam.frame_seq != last_frame_seq) {
             last_frame_seq = cam.frame_seq;
@@ -208,6 +208,13 @@ static void app_ball_detect_test(void)
                    balls.blue_ball.width_px, balls.blue_ball.height_px,
                    (unsigned long)balls.blue_ball.cell_count,
                    balls.marker_count);
+            for (int i = 0; i < balls.marker_count; i++) {
+                printf("         绿终点[%d] x=%.2f y=%.2f %ux%u cells=%lu\n",
+                       i, (double)balls.marker[i].x_ratio,
+                       (double)balls.marker[i].y_ratio,
+                       balls.marker[i].width_px, balls.marker[i].height_px,
+                       (unsigned long)balls.marker[i].cell_count);
+            }
         }
 
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -220,6 +227,12 @@ static void app_ball_detect_test(void)
             printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)red_px,
                    (unsigned long)blue_px, (unsigned long)green_px);
+            ball_marker_diag_t md;
+            ball_detect_get_marker_diag(&md);
+            printf("[green] cells=%u raw=%u reject(shape=%u fringe=%u body=%u) pending=%u confirmed=%u\n",
+                   md.occupied_cells, md.raw_candidates, md.rejected_shape,
+                   md.rejected_ball_fringe, md.rejected_body_or_geometry,
+                   md.pending_tracks, md.confirmed_markers);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[mask] R=红球 L=蓝球 G=角标 .=空白\n%s", view);
@@ -289,9 +302,9 @@ void app_ball_task_test(void)
     }
 
     printf("\n========== 找球/推球任务独立测试（MODE 8，三点一线法） ==========\n");
-    printf("云台抬起后固定。SURVEY 静止等球 2s，没等到就缓慢前进找球 →\n");
-    printf("ALIGN 对准（横移+踢转；无角标时脉冲前进接近）→ 撞球 → 退回。\n");
-    printf("摄像头画面同步显示在小车 TFT 屏上（约 6fps）。\n\n");
+    printf("云台抬起后固定；SURVEY 默认静止，连续 3 帧确认球。\n");
+    printf("球和绿色终点同帧稳定后，ALIGN/PUSH 均按：短动作→刹停→新帧。\n");
+    printf("TFT 预览限 4fps；视觉处理帧率以串口 frame 变化为准。\n\n");
 
     /* 摄像头画面实时上屏：直观看摄像头视野里有什么 */
     camera_line_set_frame_cb(tft_st7735_show_camera_frame);
@@ -307,10 +320,10 @@ void app_ball_task_test(void)
     uint32_t last_print = 0;
     uint32_t last_ascii_ms = 0;
     while (true) {
-        camera_line_result_t cam;
-        camera_line_get(&cam);
-        ball_field_result_t balls;
-        camera_line_get_ball(&balls);
+        camera_observation_t obs;
+        camera_line_get_observation(&obs);
+        const camera_line_result_t cam = obs.line;
+        const ball_field_result_t balls = obs.balls;
         /* TFT 正在显示摄像头画面，不再刷巡线状态（避免互相覆盖） */
 
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -318,7 +331,8 @@ void app_ball_task_test(void)
 
         if (ball_task_is_done()) {
             walking_direct_command(0, 0, 0);
-            printf("[ball] 任务结束。\n");
+            printf("[ball] 任务%s。\n",
+                   ball_task_succeeded() ? "成功完成" : "安全中止（未确认完成）");
             break;
         }
 
@@ -347,6 +361,13 @@ void app_ball_task_test(void)
             printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)rp, (unsigned long)up,
                    (unsigned long)bp);
+            ball_marker_diag_t md;
+            ball_detect_get_marker_diag(&md);
+            printf("[green] px=%lu cells=%u raw=%u reject(shape=%u fringe=%u body=%u) pending=%u confirmed=%u\n",
+                   (unsigned long)md.raw_green_pixels, md.occupied_cells,
+                   md.raw_candidates, md.rejected_shape,
+                   md.rejected_ball_fringe, md.rejected_body_or_geometry,
+                   md.pending_tracks, md.confirmed_markers);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
             printf("[view]\n%s", view);

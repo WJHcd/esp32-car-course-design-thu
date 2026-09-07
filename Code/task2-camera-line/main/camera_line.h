@@ -76,7 +76,15 @@ typedef struct {
     uint16_t wide_black_rows; /* 黑色覆盖窗口 >= CAM_WIDE_ROW_PCT% 的行数（T 线用） */
     uint8_t line_pattern; /* 仿真红外 a/b/c/d 图案：bit3~bit0 = a(左外)~d(右外) */
     uint32_t frame_seq;   /* 每成功解码一帧递增一次，避免主循环重复消费旧帧 */
+    uint32_t frame_ms;    /* 本帧检测结果发布时刻（esp_timer 毫秒），用于失联停车 */
 } camera_line_result_t;
+
+/* 同一摄像头帧的统一观测快照。line / balls / frame_seq 必须作为一个整体
+ * 发布和读取，禁止控制层把不同帧的巡线结果与目标结果拼在一起。 */
+typedef struct {
+    camera_line_result_t line;
+    ball_field_result_t balls;
+} camera_observation_t;
 
 /**
  * @brief 初始化摄像头巡线模块（USB Host + UVC + 处理任务）
@@ -95,6 +103,9 @@ void camera_line_get(camera_line_result_t *out);
  * @param out 输出结果；每帧覆盖，摄像头未就绪时全零
  */
 void camera_line_get_ball(ball_field_result_t *out);
+
+/** @brief 原子获取同一帧的巡线与目标识别结果（控制状态机优先使用）。 */
+void camera_line_get_observation(camera_observation_t *out);
 
 /** @brief 诊断：帧回调累计触发次数 */
 uint32_t camera_line_frame_cb_count(void);

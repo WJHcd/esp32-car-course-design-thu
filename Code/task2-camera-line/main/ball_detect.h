@@ -15,10 +15,9 @@
  *   - 蓝球与"禁止放球区"蓝色边界线同色，全局质心法会被线污染
  *     （质心落在两者之间）；连通域的形状指标（宽高比/填充率）能
  *     干净地区分"紧凑球团"与"细长线段"；
- *   - 绿角标：归一化过量绿（nExG）比例判据，对亮度和白底稀释不变，
- *     解决"远端淡绿检不出、放宽又误检"的两难；只在上半区（角标在
- *     赛道最远处）按时序累积（IIR）产生候选，瞬态噪声冲不过门限；
- *     角标旁的 JPEG 绿边伪源由"球邻域剔除"兜底（见 ball_detect.c）。
+ *   - 绿角标：归一化过量绿（nExG）比例判据，对亮度和白底稀释不变；
+ *     每帧先独立生成候选，再按目标位置跨帧确认。禁止在固定屏幕格上
+ *     长期 IIR，因为小车运动时真终点会换格，旧位置反而留下残影。
  *
  * 输出（每帧）：
  *   red_ball  : 红球（最大合格连通域）
@@ -67,22 +66,24 @@
 #define BALL_MAX_BOX_HEIGHT_PCT 70
 
 #define BALL_MARKER_MAX         2      /* 绿角标最多输出两个 */
-/* 绿色只在上半区（y ≤ BALL_MARKER_Y_MAX）累积与识别：角标在赛道
- * 最远处，新出现的目标必然在画面上半；画面下半（含车身角落凸出到
- * 底部 30% 屏蔽线以上的部分）一律不产生绿候选。⚠️ 推球末期角标可能
- * 沉到门限之下，导致"球贴近角标"完成判定失效——实车若出现，放宽到
- * 0.55~0.60。 */
-#define BALL_MARKER_Y_MAX        0.50f
-/* 时序累积：角标静止，瞬态噪声不持续。格内得分（该格 16 像素中绿色
- * 得分之和，×8 定点）按 IIR 累积，持续过线才占用——单帧 JPEG 噪声
- * 冲不过门限，淡绿真信号逐帧攒够。取代旧"格内 3/16 命中即占用"。
- * 门限 64 ↔ 持续每帧格内得分和 ≥8（如 1 像素 nExG 0.08 或 2 像素
- * 各 0.04）；单帧突发最高只到门限的 3/10，须连续约 2 帧才占用。 */
-#define BALL_MARKER_ACC_NEW      3      /* IIR 新值权重（/10；旧值 7/10） */
-#define BALL_MARKER_ACC_OCCUPIED 64     /* 占用门限（得分×8 定点） */
-/* 提取的最少占用格数放宽（角标远端成像只有 2~3 格）、宽松形状
- * （绿色类场上无同色源，形状交给累积和区域门限过滤）。 */
-#define BALL_MARKER_MIN_CELLS    2
+#define BALL_MARKER_CELL_SCORE_MIN       8
+#define BALL_MARKER_MIN_CELLS             1
+#define BALL_MARKER_RAW_MAX               8
+#define BALL_MARKER_SMALL_MAX_CELLS       3
+#define BALL_MARKER_SMALL_CONFIRM_FRAMES  3
+#define BALL_MARKER_CONFIRM_FRAMES        2
+#define BALL_MARKER_TRACK_MAX             6
+#define BALL_MARKER_TRACK_MAX_MISSES      4
+#define BALL_MARKER_TRACK_MATCH_X         0.12f
+#define BALL_MARKER_TRACK_MATCH_Y         0.12f
+/* 新目标只能在上方 60% 建立，阻止车壳建立假轨迹；已经从远处确认的
+ * 真实终点可继续跟踪到统一的 y=0.70 底部识别边界。 */
+#define BALL_MARKER_NEW_TRACK_Y_MAX       0.60f
+#define BALL_MARKER_BELOW_BALL_TOL        0.08f
+#define BALL_MARKER_ASPECT_MAX            4.0f
+#define BALL_MARKER_FILL_MIN              0.22f
+#define BALL_MARKER_MAX_BOX_WIDTH_PCT     55
+#define BALL_MARKER_MAX_BOX_HEIGHT_PCT    45
 /* 球邻域伪源剔除的尺寸上限：与球包围盒相交且 ≤ 此格数的绿候选视为
  * JPEG 镶边伪源剔除；更大的块视为真角标保留（球推到角标旁时角标
  * 成像远大于此，完成判定不受影响）。 */
@@ -116,6 +117,17 @@ typedef struct {
     uint8_t marker_count;
 } ball_field_result_t;
 
+typedef struct {
+    uint32_t raw_green_pixels;
+    uint16_t occupied_cells;
+    uint8_t raw_candidates;
+    uint8_t rejected_shape;
+    uint8_t rejected_ball_fringe;
+    uint8_t rejected_body_or_geometry;
+    uint8_t pending_tracks;
+    uint8_t confirmed_markers;
+} ball_marker_diag_t;
+
 /**
  * @brief 初始化找球识别（记录图像尺寸，静态分配网格）
  */
@@ -137,3 +149,5 @@ void ball_detect_debug_ascii(char *out, int out_len);
 void ball_detect_get_gray_diag(int *mn, int *mx, int *avg,
                                uint32_t *red_px, uint32_t *blue_px,
                                uint32_t *green_px);
+
+void ball_detect_get_marker_diag(ball_marker_diag_t *out);

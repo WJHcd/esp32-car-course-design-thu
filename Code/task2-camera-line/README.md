@@ -65,7 +65,8 @@ UVC 摄像头的配置描述符普遍超过默认的 256 字节，会报
 IDLE 任务饿死触发 task watchdog（每 5s 告警）、低优先级任务（如 app_main 的打印）被饿死。
 当前策略：
 
-- `FRAME_PROC_INTERVAL_MS=150`：采集侧理论上限约 6.7fps（实际受 JPEG 解码耗时限制），队列满时丢旧帧避免控制过期画面；
+- `FRAME_PROC_INTERVAL_MS=150`：保留实测稳定的理论上限约 6.7fps，给约 132ms 的 JPEG 解码留出调度余量，队列满时丢旧帧避免控制过期画面；
+- TFT 摄像头预览独立限制为 4fps，视觉结果先发布、后刷屏，屏幕 SPI 不再阻塞控制层取得最新结果；
 - 解码任务 `img_proc` 固定在 **CPU1**，CPU0 留给 USB 主机和主任务；
 - 摄像头分辨率 > 320x240 时解码输出按 1/2 缩放（480x320 → 240x160），
   缩放档不支持时逐级回退；黑线检测的窗口/阈值按实际分辨率自适应。
@@ -109,6 +110,8 @@ main/
   ascii_preview.c/.h 串口 ASCII 字符画预览（模式 6，验证摄像头用）
   camera_follow_test.c/.h 摄像头纯巡线测试（模式 7，无超声/避障，含弯道恢复状态）
   walking.c/.h       行走控制（沿用任务一，误差源改为摄像头）
+  ball_detect.c/.h   红/蓝球与绿色终点检测（8 邻域连通域 + 位置跨帧确认）
+  ball_task.c/.h     分段闭环推球（动作→刹停→等待新帧；成功/中止分离）
   ultrasonic.c/.h    HC-SR04 超声避障（沿用任务一）
   motor.c / encoder.c / tft_st7735.c   底层驱动（沿用任务一）
   main.c             TASK2_MODE 模式选择

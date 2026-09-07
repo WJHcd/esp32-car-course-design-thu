@@ -3,8 +3,11 @@
 #include "ultrasonic.h"
 #include "ball_task.h"
 #include "camera_line.h"
+#include "esp_log.h"
 #include <math.h>
 #include <stdlib.h>
+
+static const char *TAG = "walking";
 
 /* ------------------------ 现场标定区 ------------------------
  * 轮子命名按参考底盘：L=左轮、R=右轮、B=后轮。
@@ -969,12 +972,14 @@ void walking_update_cam(const camera_line_result_t *cam,
         /*
          * 找球/推球任务（接在避障→巡线→1s 停车之后）：由 ball_task
          * 状态机接管电机（经 walking_direct_command 走正常三轴混控）。
-         * 双球推送完成或全任务超时后收尾进 FINISH_STOP。
+         * 成功或安全中止后均停车；日志明确区分结果，超时不再冒充成功。
          */
-        ball_field_result_t balls;
-        camera_line_get_ball(&balls);
-        ball_task_update(cam, &balls, now_ms);
+        camera_observation_t obs;
+        camera_line_get_observation(&obs);
+        ball_task_update(&obs.line, &obs.balls, now_ms);
         if (ball_task_is_done()) {
+            ESP_LOGI(TAG, "找球任务终态：%s",
+                     ball_task_succeeded() ? "成功" : "安全中止");
             enter_state(CAR_STATE_FINISH_STOP, now_ms);
             apply_brake();
         }

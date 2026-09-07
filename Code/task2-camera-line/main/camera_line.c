@@ -48,6 +48,8 @@ typedef struct {
 static QueueHandle_t s_frame_queue;
 static camera_line_result_t s_result;
 static ball_field_result_t s_ball_field;   /* 找球任务三色识别结果（每帧覆盖） */
+static camera_observation_t s_observation; /* 控制层只读取该原子快照 */
+static portMUX_TYPE s_observation_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_streaming;          /* 已成功解码出帧 */
 static volatile bool s_connected;          /* UVC 流已打开 */
 static camera_line_frame_cb_t s_frame_cb;  /* 帧回调（串口/TFT 预览等） */
@@ -101,8 +103,8 @@ static esp_err_t usb_host_init(void)
  * UVC 帧回调（驱动任务上下文）：
  * 限频拷贝到 PSRAM 入队后立即归还缓冲，不做耗时处理。
  * 640x480 JPEG 解码约 200ms+/帧，全帧率解码会占满单核，
- * 因此采集侧限频。当前按 150ms 取最新帧（实测解码 132ms/帧 @240MHz+-O2，
- * 留 ~18ms 空闲喂 CPU1 看门狗），实际帧率约 6.7fps；解码仍是瓶颈。
+ * 因此采集侧限频。当前每 150ms 最多接收一帧，给实测约 132ms 的 JPEG
+ * 解码留出调度余量；TFT 预览另行限到 4fps，避免屏幕刷新反压控制。
  * 队列满时仍丢旧帧而不是积压过期画面。
  * ============================================================ */
 #define FRAME_PROC_INTERVAL_MS 150
@@ -380,7 +382,7 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
 
 /* 检测区调试辅助线（画在识别与叠加之后，只影响 TFT 预览，不污染识别）：
  * 密虚线 = 三色分类下限（底部 BALL_DETECT_Y_BOTTOM_PCT 车体屏蔽边界）；
- * 稀疏虚线 = 绿角标识别上限（BALL_MARKER_Y_MAX，仅线上方产生绿候选）。 */
+ * 稀疏虚线 = 绿角标新轨迹建立上限；已确认终点仍可向下跟踪。 */
 static void draw_detect_boundaries(uint8_t *rgb, int w, int h)
 {
     const int y_ball = h - h * BALL_DETECT_Y_BOTTOM_PCT / 100;
@@ -390,7 +392,7 @@ static void draw_detect_boundaries(uint8_t *rgb, int w, int h)
             p[0] = 255; p[1] = 255; p[2] = 255;
         }
     }
-    const int y_marker = (int)(h * BALL_MARKER_Y_MAX);
+    const int y_marker = (int)(h * BALL_MARKER_NEW_TRACK_Y_MAX);
     if (y_marker >= 1 && y_marker < h - 1) {
         for (int x = 0; x < w; x += 6) {
             uint8_t *p = rgb + ((size_t)y_marker * w + x) * 3;
@@ -492,6 +494,40 @@ static void processing_task(void *args)
         }
         ball_detect_process_rgb888(rgb_buf, &s_ball_field);
 
+        /* 先完成稳定性判定并原子发布本帧结果，再进行耗时的 TFT 绘制。
+         * 旧顺序在目标检测与 frame_seq 更新之间插入约 55ms 屏幕刷新，
+         * 控制层可能看到“新目标+旧帧号”。 */
+        {
+            static bool last_raw = false;
+            if (s_result.has_line == last_raw) {
+                if (s_line_run_len < 255) {
+                    s_line_run_len++;
+                }
+            } else {
+                last_raw = s_result.has_line;
+                s_line_run_len = 1;
+            }
+            if (s_line_run_len >= CAM_STABLE_SAMPLES &&
+                s_stable_state != s_result.has_line) {
+                s_stable_state = s_result.has_line;
+                if (s_stable_state) {
+                    s_first_seen_ms = esp_timer_get_time() / 1000;
+                }
+            }
+        }
+
+        s_result.frame_seq++;
+        s_result.frame_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        s_result.stable = (s_line_run_len >= CAM_STABLE_SAMPLES &&
+                           s_stable_state == s_result.has_line &&
+                           (!s_result.has_line ||
+                            (esp_timer_get_time() / 1000 - s_first_seen_ms >= CAM_SETTLE_MS)));
+        taskENTER_CRITICAL(&s_observation_mux);
+        s_observation.line = s_result;
+        s_observation.balls = s_ball_field;
+        taskEXIT_CRITICAL(&s_observation_mux);
+        s_streaming = true;
+
         /* 识别结果叠加方框：红球黄框 / 蓝球绿框 / 角标紫框（显示色，
          * 实物为绿色——紫框与蓝球的绿框区分不同目标））。
          * 球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
@@ -513,36 +549,6 @@ static void processing_task(void *args)
             }
             s_frame_cb(rgb_buf, jpeg_out.width, jpeg_out.height);
         }
-
-        /*
-         * 稳定性判定：has_line 连续 CAM_STABLE_SAMPLES 帧一致才更新
-         * s_stable_state；首次见线后记录时刻供 settle 等待。
-         */
-        {
-            static bool last_raw = false;
-            if (s_result.has_line == last_raw) {
-                if (s_line_run_len < 255) {
-                    s_line_run_len++;
-                }
-            } else {
-                last_raw = s_result.has_line;
-                s_line_run_len = 1;
-            }
-            if (s_line_run_len >= CAM_STABLE_SAMPLES &&
-                s_stable_state != s_result.has_line) {
-                s_stable_state = s_result.has_line;
-                if (s_stable_state) {
-                    s_first_seen_ms = esp_timer_get_time() / 1000;
-                }
-            }
-        }
-
-        s_result.frame_seq++;
-        s_result.stable = (s_line_run_len >= CAM_STABLE_SAMPLES &&
-                           s_stable_state == s_result.has_line &&
-                           (!s_result.has_line ||
-                            (esp_timer_get_time() / 1000 - s_first_seen_ms >= CAM_SETTLE_MS)));
-        s_streaming = true;
 
         frames++;
         /* 解码耗时观测：无论统计日志开关，每 2s 打一条（调参用） */
@@ -639,6 +645,8 @@ static void uvc_task(void *args)
 bool camera_line_init(void)
 {
     memset(&s_result, 0, sizeof(s_result));
+    memset(&s_ball_field, 0, sizeof(s_ball_field));
+    memset(&s_observation, 0, sizeof(s_observation));
 
     esp_err_t err = usb_host_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -690,7 +698,9 @@ void camera_line_get(camera_line_result_t *out)
     if (out == NULL) {
         return;
     }
-    *out = s_result;
+    taskENTER_CRITICAL(&s_observation_mux);
+    *out = s_observation.line;
+    taskEXIT_CRITICAL(&s_observation_mux);
 }
 
 void camera_line_get_ball(ball_field_result_t *out)
@@ -698,7 +708,19 @@ void camera_line_get_ball(ball_field_result_t *out)
     if (out == NULL) {
         return;
     }
-    *out = s_ball_field;
+    taskENTER_CRITICAL(&s_observation_mux);
+    *out = s_observation.balls;
+    taskEXIT_CRITICAL(&s_observation_mux);
+}
+
+void camera_line_get_observation(camera_observation_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    taskENTER_CRITICAL(&s_observation_mux);
+    *out = s_observation;
+    taskEXIT_CRITICAL(&s_observation_mux);
 }
 
 uint32_t camera_line_frame_cb_count(void)
@@ -713,7 +735,9 @@ bool camera_line_ready(void)
 
 bool camera_line_stable(void)
 {
-    return s_streaming && s_result.stable;
+    camera_line_result_t line;
+    camera_line_get(&line);
+    return s_streaming && line.stable;
 }
 
 void camera_line_set_frame_cb(camera_line_frame_cb_t cb)
