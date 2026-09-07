@@ -3,8 +3,8 @@
 任务二：赛道与任务一相同，巡线改用 USB 摄像头（UVC）+ 黑线质心检测，避障仍用 HC-SR04。
 接线见 [接线说明.md](接线说明.md)。
 
-荧光浅绿终点检测的本轮修改、可调阈值和静态验收步骤见
-[绿色检测标定说明](tests/GREEN_CALIBRATION.md)。本轮未更改接线、运动控制或摄像头参数。
+黑色终点检测的抗巡线/场外物体过滤、可调阈值和静态验收步骤见
+[黑色终点检测说明](tests/BLACK_MARKER_CALIBRATION.md)。本轮未更改接线、运动控制或摄像头参数。
 
 ## 快速开始
 
@@ -113,7 +113,7 @@ main/
   ascii_preview.c/.h 串口 ASCII 字符画预览（模式 6，验证摄像头用）
   camera_follow_test.c/.h 摄像头纯巡线测试（模式 7，无超声/避障，含弯道恢复状态）
   walking.c/.h       行走控制（沿用任务一，误差源改为摄像头）
-  ball_detect.c/.h   红/蓝球与绿色终点检测（8 邻域连通域 + 位置跨帧确认）
+  ball_detect.c/.h   红/蓝球与黑色终点检测（形状/地面/球几何 + 跨帧确认）
   ball_task.c/.h     分段闭环推球（动作→刹停→等待新帧；成功/中止分离）
   ultrasonic.c/.h    HC-SR04 超声避障（沿用任务一）
   motor.c / encoder.c / tft_st7735.c   底层驱动（沿用任务一）

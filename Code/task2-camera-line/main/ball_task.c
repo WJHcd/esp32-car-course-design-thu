@@ -9,9 +9,9 @@
 /* ============================================================
  * 推球状态机实现（v3 三点一线法）
  *
- * 视觉约定（来自 ball_detect，2026-09-03 黑球→红球、角标→绿色）：
+ * 视觉约定（来自 ball_detect，当前角标实物为黑色终点块）：
  *   - 红球/蓝球：ball_field 里各自的 detected + x_ratio + area_ratio；
- *   - 角标（绿）：marker[0..count-1]，按面积从大到小；
+ *   - 黑终点：marker[0..count-1]，按面积从大到小；
  *   - 云台抬至 BALL_TASK_TILT_SURVEY_DEG 后全程固定。
  *
  * 三点一线的图像几何（ALIGN 的依据）：
@@ -620,10 +620,10 @@ void ball_task_update(const camera_line_result_t *cam,
         const ball_blob_t *marker =
             lock_or_pick_marker(balls, ball->x_ratio, ball->y_ratio);
         if (marker == NULL) {
-            /* 首阶段必须同时看稳球和绿色终点才允许移动。画面能看到但
+            /* 首阶段必须同时看稳球和黑色终点才允许移动。画面能看到但
              * 算法没框时保持静止，避免盲目前进把误检放大成满场乱跑。 */
             if (wait_log_due(now_ms)) {
-                ESP_LOGI(TAG, "已见%s但本帧无稳定绿色终点，保持停车",
+                ESP_LOGI(TAG, "已见%s但本帧无稳定黑色终点，保持停车",
                          s_color_name[s_current]);
             }
             break;
@@ -640,7 +640,7 @@ void ball_task_update(const camera_line_result_t *cam,
 
         if (fabsf(e) <= BALL_ALIGN_DEADBAND &&
             fabsf(pair_off) <= BALL_ALIGN_CENTER_BAND) {
-            ESP_LOGI(TAG, "%s 与绿色终点对准（e=%.2f x=%.2f），进入分段推球",
+            ESP_LOGI(TAG, "%s 与黑色终点对准（e=%.2f x=%.2f），进入分段推球",
                      s_color_name[s_current], (double)e, (double)pair_x);
             set_state(BALL_TASK_PUSH, now_ms);
         } else if (fabsf(e) > BALL_ALIGN_DEADBAND && !near_edge) {
@@ -706,7 +706,7 @@ void ball_task_update(const camera_line_result_t *cam,
             s_push_blind_step_used = false;
             marker = lock_or_pick_marker(balls, ball->x_ratio, ball->y_ratio);
 
-            /* 到位使用二维最近邻，避免另一块绿色终点在水平位置接近时
+            /* 到位使用二维最近邻，避免另一块黑色终点在水平位置接近时
              * 被误配。 */
             for (int i = 0; i < balls->marker_count; i++) {
                 const float dx = fabsf(balls->marker[i].x_ratio - ball->x_ratio);
@@ -729,7 +729,7 @@ void ball_task_update(const camera_line_result_t *cam,
             if (cam->frame_seq != s_push_done_frame_seq && adjacent &&
                 adjacent_dist <= s_done_prev_dist + BALL_DONE_DIST_EPS) {
                 s_pending[s_current] = false;
-                ESP_LOGI(TAG, "%s 已连续两帧贴近绿色终点，%s",
+                ESP_LOGI(TAG, "%s 已连续两帧贴近黑色终点，%s",
                          s_color_name[s_current],
                          (s_pending[TARGET_RED] || s_pending[TARGET_BLUE])
                              ? "退回后处理下一球" : "双球任务成功");
@@ -745,7 +745,7 @@ void ball_task_update(const camera_line_result_t *cam,
             s_push_done_pending_ms = now_ms;
             s_push_done_frame_seq = cam->frame_seq;
             s_done_prev_dist = adjacent_dist;
-            ESP_LOGI(TAG, "%s 接近绿色终点（dx=%.2f dy=%.2f），停车等下一帧复核",
+            ESP_LOGI(TAG, "%s 接近黑色终点（dx=%.2f dy=%.2f），停车等下一帧复核",
                      s_color_name[s_current], (double)adjacent_dx,
                      (double)adjacent_dy);
             break;
@@ -778,10 +778,10 @@ void ball_task_update(const camera_line_result_t *cam,
         }
 
         if (marker == NULL) {
-            /* 已经进入 PUSH 也不能因为绿色终点短暂消失就沿旧方向连续
+            /* 已经进入 PUSH 也不能因为黑色终点短暂消失就沿旧方向连续
              * 推。保持停车，下一帧重试；持续看不到最终会明确超时中止。 */
             if (wait_log_due(now_ms)) {
-                ESP_LOGI(TAG, "推球中本帧无稳定绿色终点，保持停车");
+                ESP_LOGI(TAG, "推球中本帧无稳定黑色终点，保持停车");
             }
             break;
         }

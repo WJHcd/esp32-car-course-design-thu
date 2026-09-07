@@ -5,8 +5,8 @@
 /* ============================================================
  * 三色识别实现：逐像素分类 → 4× 降采样占用网格 → flood-fill
  * 连通域 → 形状过滤（宽高比/填充率）→ 每色取最大合格团块。
- * （绿角标使用明显绿/浅黄绿双通道 + 候选位置跨帧确认；
- *  nExG 作为格内得分，不宣称对白底混色不变；
+ * （黑终点使用灰度分割 + 实心方块/白地包围/球相对位置过滤
+ *  + 候选位置跨帧确认；
  *  红/蓝球沿用既有绝对差判据与实车标定。）
  *
  * 每帧成本：全帧像素分类 ~0.5ms + 三张 80x60 网格的 flood fill
@@ -31,7 +31,7 @@ static color_grid_t s_grid_blue;
 static color_grid_t s_grid_marker;
 static char s_debug_ascii[(GRID_W_MAX / 2 + 2) * (GRID_H_MAX / 2 + 1)];
 static int s_diag_min, s_diag_max, s_diag_avg;   /* 中心区灰度诊断 */
-static uint32_t s_dbg_red_px, s_dbg_blue_px, s_dbg_green_px;
+static uint32_t s_dbg_red_px, s_dbg_blue_px, s_dbg_marker_px;
 static ball_marker_diag_t s_marker_diag;
 
 typedef struct {
@@ -59,7 +59,7 @@ void ball_detect_init(int width, int height)
     memset(&s_marker_diag, 0, sizeof(s_marker_diag));
 }
 
-/* ---- 像素级颜色分类（蓝/红依次判定；绿色单独走 green_score 连续得分）---- */
+/* ---- 像素级球颜色分类（黑终点另走灰度判定）---- */
 static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
 {
     if (b > BALL_BLUE_MIN_B && b - (r > g ? r : g) > BALL_BLUE_DELTA) {
@@ -71,23 +71,10 @@ static inline int pixel_class(uint8_t r, uint8_t g, uint8_t b)
     return 0;
 }
 
-/* 绿色/荧光黄绿双通道。弱色度要求 R 明显高于 B，不能仅靠 G 偏高。
- * 保留高亮浅色；完全过曝或与银色具有相同 RGB 时无法仅凭颜色区分。 */
-static inline uint8_t green_score(uint8_t r, uint8_t g, uint8_t b)
+static inline uint8_t pixel_gray(uint8_t r, uint8_t g, uint8_t b)
 {
-    const int sum = (int)r + g + b;
-    if (sum < BALL_GREEN_SUM_MIN) return 0;
-    if ((int)g - ((int)r > (int)b ? r : b) < BALL_GREEN_DELTA_MIN) return 0;
-    const int min_rb = r < b ? r : b;
-    const int span = (int)g - min_rb;
-    const bool strong = span * 100 >= BALL_GREEN_STRONG_CHROMA_PCT * (int)g;
-    const bool pale = (int)g - b >= BALL_GREEN_PALE_SPAN_MIN &&
-        span * 100 >= BALL_GREEN_PALE_CHROMA_PCT * (int)g &&
-        (int)r > b && 2 * ((int)r - b) >= (int)g - r;
-    if (!strong && !pale) return 0;
-    const int exg = 2 * (int)g - (int)r - (int)b;
-    const int score = exg * 100 / sum;
-    return score > BALL_GREEN_SCORE_MAX ? BALL_GREEN_SCORE_MAX : (uint8_t)score;
+    return (uint8_t)(((uint16_t)r * 77u + (uint16_t)g * 150u +
+                      (uint16_t)b * 29u) >> 8);
 }
 
 /* ---- 形态学腐蚀（8 邻域，邻居 <5 个的格子剔除）：细长线段/边界被
@@ -115,7 +102,7 @@ static void erode_grid(color_grid_t *g)
 }
 
 /* ---- 单色连通域提取：从占用网格里 flood fill 出所有合格团块 ----
- * min_cells 由调用方传入（球 3 格；远端绿角标放宽到 2 格） */
+ * min_cells 由调用方传入（球与黑终点分别配置） */
 typedef struct {
     int count;          /* 格子数 */
     int sum_x, sum_y;   /* 格子坐标和（求质心） */
@@ -234,18 +221,56 @@ static void extract_blobs(color_grid_t *g, ball_blob_t *out_blobs,
 
 static bool marker_shape_ok(const ball_blob_t *m)
 {
+    const int edge_x = s_width * BALL_MARKER_EDGE_MARGIN_PCT / 100;
+    const int edge_y = s_height * BALL_MARKER_EDGE_MARGIN_PCT / 100;
+    if (m->x_min_px <= edge_x || m->y_min_px <= edge_y ||
+        m->x_min_px + m->width_px >= s_width - edge_x ||
+        m->y_min_px + m->height_px >= s_height - edge_y) {
+        return false; /* 场外家具/黑线从画面边缘延入时不构成完整终点 */
+    }
     if (m->width_px * 100 > s_width * BALL_MARKER_MAX_BOX_WIDTH_PCT ||
         m->height_px * 100 > s_height * BALL_MARKER_MAX_BOX_HEIGHT_PCT) {
         return false;
     }
     const int bw = m->width_px / BALL_GRID_DIV;
     const int bh = m->height_px / BALL_GRID_DIV;
-    /* 地面远目标可被透视压成单行；统一宽高比规则，不能在第4格
-     * 突然增加最小高度门槛。小目标仍须跨帧确认。 */
+    if (bw < 2 || bh < 2) return false;
     const float aspect = (float)(bw > bh ? bw : bh) /
                          (float)(bw < bh ? bw : bh);
     const float fill = (float)m->cell_count / (float)(bw * bh);
     return aspect <= BALL_MARKER_ASPECT_MAX && fill >= BALL_MARKER_FILL_MIN;
+}
+
+/* 黑终点应落在浅色赛场地面上。只采样包围盒外环，不要求四边全白，
+ * 因为球接近终点时会遮住一部分；细线主要仍由形状过滤负责。 */
+static bool marker_has_light_surround(const uint8_t *rgb,
+                                      const ball_blob_t *m)
+{
+    const int margin = BALL_MARKER_SURROUND_MARGIN_CELLS * BALL_GRID_DIV;
+    int x0 = (int)m->x_min_px - margin;
+    int y0 = (int)m->y_min_px - margin;
+    int x1 = (int)m->x_min_px + m->width_px + margin - 1;
+    int y1 = (int)m->y_min_px + m->height_px + margin - 1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= s_width) x1 = s_width - 1;
+    if (y1 >= s_height) y1 = s_height - 1;
+
+    int samples = 0, light = 0;
+    for (int y = y0; y <= y1; y += 2) {
+        for (int x = x0; x <= x1; x += 2) {
+            const bool outside = x < m->x_min_px ||
+                x >= m->x_min_px + m->width_px ||
+                y < m->y_min_px || y >= m->y_min_px + m->height_px;
+            if (!outside) continue;
+            const uint8_t *p = rgb + ((size_t)y * s_width + x) * 3;
+            samples++;
+            if (pixel_gray(p[0], p[1], p[2]) >=
+                BALL_MARKER_SURROUND_GRAY_MIN) light++;
+        }
+    }
+    return samples > 0 &&
+           light * 100 >= samples * BALL_MARKER_SURROUND_LIGHT_PCT;
 }
 
 static bool marker_is_ball_fringe(const ball_blob_t *m,
@@ -262,15 +287,11 @@ static bool marker_is_ball_fringe(const ball_blob_t *m,
            my <= ball->y_min_px + ball->height_px;
 }
 
-static bool marker_can_start_track(const ball_blob_t *m,
-                                   const ball_field_result_t *field)
+static bool marker_plausible_with_ball(const ball_blob_t *m,
+                                       const ball_field_result_t *field)
 {
-    /* 新轨迹不允许从车体所在的下部区域建立；真实终点一旦在远处完成
-     * 连续帧确认，后续匹配不受此门槛限制，可跟踪到 0.70 分类边界。 */
-    if (m->y_ratio > BALL_MARKER_NEW_TRACK_Y_MAX) return false;
-
-    /* 终点通常比球更远，图像位置应在球上方或只略低。存在可见球时
-     * 至少要与其中一个球满足该几何关系，进一步排除车壳固定反光。 */
+    /* 黑色干扰太多，终点不再允许脱离球单独成立。它必须位于至少一个
+     * 可见球的后方（图像中更上方，近距离遮挡留少量容差）。 */
     const ball_blob_t *visible[2] = { &field->red_ball, &field->blue_ball };
     bool any_ball = false;
     bool plausible = false;
@@ -281,7 +302,17 @@ static bool marker_can_start_track(const ball_blob_t *m,
             plausible = true;
         }
     }
-    return !any_ball || plausible;
+    return any_ball && plausible;
+}
+
+static bool marker_can_start_track(const ball_blob_t *m,
+                                   const ball_field_result_t *field)
+{
+    /* 场外桌椅通常落在极上方或触边；车体在下方。已确认的真实终点
+     * 可继续跟踪到统一的 y=0.70 分类边界。 */
+    if (m->y_ratio < BALL_MARKER_NEW_TRACK_Y_MIN ||
+        m->y_ratio > BALL_MARKER_NEW_TRACK_Y_MAX) return false;
+    return marker_plausible_with_ball(m, field);
 }
 
 static uint8_t marker_required_hits(const ball_blob_t *m)
@@ -291,12 +322,14 @@ static uint8_t marker_required_hits(const ball_blob_t *m)
         : BALL_MARKER_CONFIRM_FRAMES;
 }
 
-static void update_marker_tracks(const ball_blob_t *raw, int raw_n,
+static void update_marker_tracks(const uint8_t *rgb,
+                                 const ball_blob_t *raw, int raw_n,
                                  ball_field_result_t *field)
 {
     ball_blob_t candidate[BALL_MARKER_RAW_MAX];
     int candidate_n = 0;
     s_marker_diag.rejected_shape = 0;
+    s_marker_diag.rejected_surround = 0;
     s_marker_diag.rejected_ball_fringe = 0;
     s_marker_diag.rejected_body_or_geometry = 0;
 
@@ -307,10 +340,22 @@ static void update_marker_tracks(const ball_blob_t *raw, int raw_n,
             }
             continue;
         }
+        if (!marker_has_light_surround(rgb, &raw[i])) {
+            if (s_marker_diag.rejected_surround < UINT8_MAX) {
+                s_marker_diag.rejected_surround++;
+            }
+            continue;
+        }
         if (marker_is_ball_fringe(&raw[i], &field->red_ball) ||
             marker_is_ball_fringe(&raw[i], &field->blue_ball)) {
             if (s_marker_diag.rejected_ball_fringe < UINT8_MAX) {
                 s_marker_diag.rejected_ball_fringe++;
+            }
+            continue;
+        }
+        if (!marker_plausible_with_ball(&raw[i], field)) {
+            if (s_marker_diag.rejected_body_or_geometry < UINT8_MAX) {
+                s_marker_diag.rejected_body_or_geometry++;
             }
             continue;
         }
@@ -438,14 +483,14 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
 
     /* 逐像素分类并落到降采样网格。球的圆弧边缘、高光和 JPEG 色块
      * 会让格内颜色不纯，使用较低命中数保住小目标，噪声交给连通域
-     * 的面积/紧凑度过滤。绿色单独累计得分，再按候选位置跨帧确认。 */
+     * 的面积/紧凑度过滤。黑终点独立按灰度生成候选，再跨帧确认。 */
     const int cells_x = s_grid_w, cells_y = s_grid_h;
-    uint32_t tot_red = 0, tot_blue = 0, tot_green = 0;
+    uint32_t tot_red = 0, tot_blue = 0, tot_marker = 0;
     /* 底部车体区域不参与分类（画面下方约 30% 是车自身，见 ball_detect.h） */
     const int y_max = s_height - s_height * BALL_DETECT_Y_BOTTOM_PCT / 100;
     for (int gy = 0; gy < cells_y; gy++) {
         for (int gx = 0; gx < cells_x; gx++) {
-            int red = 0, blue = 0, green_sum = 0, green_hits = 0;
+            int red = 0, blue = 0, marker_black = 0;
             for (int py = 0; py < BALL_GRID_DIV; py++) {
                 const int y = gy * BALL_GRID_DIV + py;
                 if (y >= s_height || y >= y_max) break;
@@ -454,23 +499,26 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
                     const int x = gx * BALL_GRID_DIV + px;
                     if (x >= s_width) break;
                     const uint8_t *p = row + (size_t)x * 3;
-                    switch (pixel_class(p[0], p[1], p[2])) {
+                    const int cls = pixel_class(p[0], p[1], p[2]);
+                    switch (cls) {
                     case 1: blue++; tot_blue++; break;
                     case 2: red++; tot_red++; break;
                     default: break;
                     }
-                    const uint8_t gs = green_score(p[0], p[1], p[2]);
-                    green_sum += gs;
-                    if (gs) { tot_green++; green_hits++; }
+                    /* 红/蓝球在灰度上也可能很暗；已被颜色类命中的像素
+                     * 不得同时进入黑终点掩码。 */
+                    if (cls == 0 && pixel_gray(p[0], p[1], p[2]) <=
+                        BALL_MARKER_BLACK_GRAY_MAX) {
+                        marker_black++;
+                        tot_marker++;
+                    }
                 }
             }
             const int idx = gy * cells_x + gx;
             if (red  >= BALL_CELL_HIT_MIN) s_grid_red.occ[idx] = 1;
             if (blue >= BALL_CELL_HIT_MIN) s_grid_blue.occ[idx] = 1;
-            /* 每帧独立产生绿色格，时序确认在候选轨迹层完成。这样小车
-             * 运动时终点换格不会留下旧位置 IIR 残影。 */
-            if (green_sum >= BALL_MARKER_CELL_SCORE_MIN &&
-                green_hits >= BALL_MARKER_CELL_HIT_MIN) {
+            /* 黑终点格内要求至少半数像素为黑；时序确认在候选轨迹层。 */
+            if (marker_black >= BALL_MARKER_CELL_HIT_MIN) {
                 s_grid_marker.occ[idx] = 1;
                 if (s_marker_diag.occupied_cells < UINT16_MAX) {
                     s_marker_diag.occupied_cells++;
@@ -480,25 +528,25 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
     }
     s_dbg_red_px = tot_red;
     s_dbg_blue_px = tot_blue;
-    s_dbg_green_px = tot_green;
-    s_marker_diag.raw_green_pixels = tot_green;
+    s_dbg_marker_px = tot_marker;
+    s_marker_diag.raw_marker_pixels = tot_marker;
 
-    /* 调试视图与头文件约定保持一致：R=红球、L=蓝球、G=绿角标、.=空。
+    /* 调试视图与头文件约定保持一致：R=红球、L=蓝球、M=黑终点、.=空。
      * 每个字符汇总 2x2 个网格，方便直接判断颜色分类是否产生候选。 */
     {
         char *p = s_debug_ascii;
         for (int gy = 0; gy < cells_y; gy += 2) {
             for (int gx = 0; gx < cells_x; gx += 2) {
-                bool red = false, blue = false, green = false;
+                bool red = false, blue = false, marker = false;
                 for (int dy = 0; dy < 2 && gy + dy < cells_y; dy++) {
                     for (int dx = 0; dx < 2 && gx + dx < cells_x; dx++) {
                         const int idx = (gy + dy) * cells_x + gx + dx;
                         red   |= s_grid_red.occ[idx] != 0;
                         blue  |= s_grid_blue.occ[idx] != 0;
-                        green |= s_grid_marker.occ[idx] != 0;
+                        marker |= s_grid_marker.occ[idx] != 0;
                     }
                 }
-                *p++ = red ? 'R' : (blue ? 'L' : (green ? 'G' : '.'));
+                *p++ = red ? 'R' : (blue ? 'L' : (marker ? 'M' : '.'));
             }
             *p++ = '\n';
         }
@@ -534,13 +582,13 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
     int n;
     extract_blobs(&s_grid_red, &out->red_ball, 1, &n, true, BALL_MIN_CELLS);
     extract_blobs(&s_grid_blue, &out->blue_ball, 1, &n, true, BALL_MIN_CELLS);
-    /* 先保留更多原始绿色候选；空间、形状和连续帧确认随后统一处理。 */
+    /* 先保留更多原始黑色候选；空间、形状和连续帧确认随后统一处理。 */
     ball_blob_t raw_marker[BALL_MARKER_RAW_MAX] = {0};
     int marker_n = 0;
     extract_blobs(&s_grid_marker, raw_marker, BALL_MARKER_RAW_MAX, &marker_n,
                   false, BALL_MARKER_MIN_CELLS);
     s_marker_diag.raw_candidates = (uint8_t)marker_n;
-    update_marker_tracks(raw_marker, marker_n, out);
+    update_marker_tracks(rgb, raw_marker, marker_n, out);
 }
 
 void ball_detect_debug_ascii(char *out, int out_len)
@@ -552,14 +600,14 @@ void ball_detect_debug_ascii(char *out, int out_len)
 
 void ball_detect_get_gray_diag(int *mn, int *mx, int *avg,
                                uint32_t *red_px, uint32_t *blue_px,
-                               uint32_t *green_px)
+                               uint32_t *marker_px)
 {
     if (mn)  *mn  = s_diag_min;
     if (mx)  *mx  = s_diag_max;
     if (avg) *avg = s_diag_avg;
     if (red_px)   *red_px   = s_dbg_red_px;
     if (blue_px)  *blue_px  = s_dbg_blue_px;
-    if (green_px) *green_px = s_dbg_green_px;
+    if (marker_px) *marker_px = s_dbg_marker_px;
 }
 
 void ball_detect_get_marker_diag(ball_marker_diag_t *out)

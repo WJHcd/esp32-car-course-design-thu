@@ -3,11 +3,11 @@
 #include <stdbool.h>
 
 /* ============================================================
- * 找球任务目标识别（红球 / 蓝球 / 绿色角标）
+ * 找球任务目标识别（红球 / 蓝球 / 黑色终点块）
  *
  * 2026-09-03 场地实物变更：原目标"黑球"换成"红球"，红球完全复用
  * 原来黑球的识别链路（4× 降采样网格 + 连通域 + 形状过滤），红色
- * 分类改为按"球"处理。推球目标角标为绿色（曾短暂改黑后又换回）。
+ * 分类改为按"球"处理。推球目标现改为约 10cm 的黑色实心方块。
  *
  *   - 红球：场地以白底为主，红色与黑线/蓝线异色，纯色类本身干净；
  *     但球面高光、JPEG 色块会打碎色区，沿用 4× 网格 + 低格内门限
@@ -15,14 +15,14 @@
  *   - 蓝球与"禁止放球区"蓝色边界线同色，全局质心法会被线污染
  *     （质心落在两者之间）；连通域的形状指标（宽高比/填充率）能
  *     干净地区分"紧凑球团"与"细长线段"；
- *   - 绿角标：明显绿色与荧光黄绿色双通道；白底混色会降低色度，
- *     每帧先独立生成候选，再按目标位置跨帧确认。禁止在固定屏幕格上
- *     长期 IIR，因为小车运动时真终点会换格，旧位置反而留下残影。
+ *   - 黑终点与黑色巡线、场外桌椅同色，不能只凭像素颜色。检测使用
+ *     “黑色连通域 → 实心方块形状 → 白色地面包围 → 与可见球的前后
+ *     关系 → 连续帧确认”。
  *
  * 输出（每帧）：
  *   red_ball  : 红球（最大合格连通域）
  *   blue_ball : 蓝球（最大合格连通域）
- *   marker[]  : 绿角标（最多两个，按面积从大到小，[0] 为较大者）
+ *   marker[]  : 黑色终点（最多两个，按面积从大到小，[0] 为较大者）
  *
  * 所有阈值集中在下方标定区，现场按光照调整。
  * ============================================================ */
@@ -40,16 +40,13 @@
 #define BALL_BLUE_MIN_B         50     /* 蓝：B 通道最小值（暗光下调低） */
 #define BALL_BLUE_DELTA         20     /* 蓝：B 需比 max(R,G) 高出的差值 */
 
-/* 现场目标是荧光浅绿色，不要求颜色深，也不限制亮度上限。
- * 强色度通道兼容普通绿；弱色度通道要求黄绿方向 R>B，避免银灰色
- * 仅 G 略高就命中。以下为待原始摄像头图像标定的初值，不是实测值。
- * nExG 仅用于格内得分；它对白底混色并不保持不变。 */
-#define BALL_GREEN_SUM_MIN        200    /* 亮度下限 R+G+B */
-#define BALL_GREEN_DELTA_MIN      2      /* G−max(R,B) 最小绝对差 */
-#define BALL_GREEN_STRONG_CHROMA_PCT 12  /* (max-min)/max，明显绿色 */
-#define BALL_GREEN_PALE_CHROMA_PCT    4  /* 浅黄绿允许较低色度 */
-#define BALL_GREEN_PALE_SPAN_MIN      8  /* G-B，阻止近乎白/灰的量化噪声 */
-#define BALL_GREEN_SCORE_MAX      63     /* 单像素得分上限（nExG×100 截断） */
+/* 黑终点应明显低于巡线使用的 120 灰度阈值。105 是保守初值，避免普通
+ * 阴影被收进来；现场应依据未叠框的原始相机帧复标。 */
+#define BALL_MARKER_BLACK_GRAY_MAX       105
+#define BALL_MARKER_CELL_HIT_MIN           8 /* 4x4 格至少半数像素为黑 */
+#define BALL_MARKER_SURROUND_GRAY_MIN     155 /* 外围白色地面灰度下限 */
+#define BALL_MARKER_SURROUND_LIGHT_PCT     55 /* 外围至少 55% 为亮地面 */
+#define BALL_MARKER_SURROUND_MARGIN_CELLS   2 /* 包围盒外采样 8px */
 
 /* ---- 连通域形状过滤 ----
  * 小球在 240x160 解码帧里通常只有十几像素，不能先做强腐蚀。
@@ -63,27 +60,27 @@
 #define BALL_MAX_BOX_WIDTH_PCT  55     /* 过大的色区/线段区域不作为球 */
 #define BALL_MAX_BOX_HEIGHT_PCT 70
 
-#define BALL_MARKER_MAX         2      /* 绿角标最多输出两个 */
-#define BALL_MARKER_CELL_SCORE_MIN       8
-#define BALL_MARKER_CELL_HIT_MIN         3 /* 不能靠一个高分像素点亮整格 */
-#define BALL_MARKER_MIN_CELLS             1
-#define BALL_MARKER_RAW_MAX               8
-#define BALL_MARKER_SMALL_MAX_CELLS       3
-#define BALL_MARKER_SMALL_CONFIRM_FRAMES  3
-#define BALL_MARKER_CONFIRM_FRAMES        2
+#define BALL_MARKER_MAX         2      /* 黑终点最多输出两个 */
+#define BALL_MARKER_MIN_CELLS              4 /* 至少形成二维小块 */
+#define BALL_MARKER_RAW_MAX               16 /* 防大黑线提前挤掉真候选 */
+#define BALL_MARKER_SMALL_MAX_CELLS        8
+#define BALL_MARKER_SMALL_CONFIRM_FRAMES   4
+#define BALL_MARKER_CONFIRM_FRAMES         3
 #define BALL_MARKER_TRACK_MAX             6
 #define BALL_MARKER_TRACK_MAX_MISSES      4
 #define BALL_MARKER_TRACK_MATCH_X         0.12f
 #define BALL_MARKER_TRACK_MATCH_Y         0.12f
+#define BALL_MARKER_NEW_TRACK_Y_MIN       0.12f /* 极上方多为场外背景 */
 /* 新目标只能在上方 60% 建立，阻止车壳建立假轨迹；已经从远处确认的
  * 真实终点可继续跟踪到统一的 y=0.70 底部识别边界。 */
 #define BALL_MARKER_NEW_TRACK_Y_MAX       0.60f
 #define BALL_MARKER_BELOW_BALL_TOL        0.08f
-#define BALL_MARKER_ASPECT_MAX            4.0f
-#define BALL_MARKER_FILL_MIN              0.22f
-#define BALL_MARKER_MAX_BOX_WIDTH_PCT     55
+#define BALL_MARKER_ASPECT_MAX            3.0f
+#define BALL_MARKER_FILL_MIN              0.55f
+#define BALL_MARKER_MAX_BOX_WIDTH_PCT     45
 #define BALL_MARKER_MAX_BOX_HEIGHT_PCT    45
-/* 球邻域伪源剔除的尺寸上限：与球包围盒相交且 ≤ 此格数的绿候选视为
+#define BALL_MARKER_EDGE_MARGIN_PCT        2 /* 触边物体不建轨迹 */
+/* 球邻域伪源剔除的尺寸上限：与球包围盒相交且 ≤ 此格数的黑候选视为
  * JPEG 镶边伪源剔除；更大的块视为真角标保留（球推到角标旁时角标
  * 成像远大于此，完成判定不受影响）。 */
 #define BALL_MARKER_FRINGE_MAX_CELLS 6
@@ -112,15 +109,16 @@ typedef struct {
 typedef struct {
     ball_blob_t red_ball;              /* 红球（原黑球角色：主目标） */
     ball_blob_t blue_ball;
-    ball_blob_t marker[BALL_MARKER_MAX];   /* 绿角标，按面积从大到小 */
+    ball_blob_t marker[BALL_MARKER_MAX];   /* 黑终点，按面积从大到小 */
     uint8_t marker_count;
 } ball_field_result_t;
 
 typedef struct {
-    uint32_t raw_green_pixels;
+    uint32_t raw_marker_pixels;
     uint16_t occupied_cells;
     uint8_t raw_candidates;
     uint8_t rejected_shape;
+    uint8_t rejected_surround;
     uint8_t rejected_ball_fringe;
     uint8_t rejected_body_or_geometry;
     uint8_t pending_tracks;
@@ -138,7 +136,7 @@ void ball_detect_init(int width, int height);
 void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out);
 
 /**
- * @brief 取最近一帧的调试 ASCII 视图（R=红球 L=蓝球 G=绿角标 .=空白）
+ * @brief 取最近一帧的调试 ASCII 视图（R=红球 L=蓝球 M=黑终点 .=空白）
  * @param out     输出缓冲（每 2 格采样 1 格，含换行）
  * @param out_len 缓冲长度
  */
@@ -147,6 +145,6 @@ void ball_detect_debug_ascii(char *out, int out_len);
 /** @brief 取灰度诊断：中心区 min/max/avg + 全帧三类色像素计数 */
 void ball_detect_get_gray_diag(int *mn, int *mx, int *avg,
                                uint32_t *red_px, uint32_t *blue_px,
-                               uint32_t *green_px);
+                               uint32_t *marker_px);
 
 void ball_detect_get_marker_diag(ball_marker_diag_t *out);

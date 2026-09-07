@@ -99,7 +99,7 @@ bool camera_line_init(void);
 void camera_line_get(camera_line_result_t *out);
 
 /**
- * @brief 获取最近一帧的找球任务识别结果（红球/蓝球/绿角标）
+ * @brief 获取最近一帧的找球任务识别结果（红球/蓝球/黑终点）
  * @param out 输出结果；每帧覆盖，摄像头未就绪时全零
  */
 void camera_line_get_ball(ball_field_result_t *out);

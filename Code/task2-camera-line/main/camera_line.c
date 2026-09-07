@@ -382,7 +382,7 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
 
 /* 检测区调试辅助线（画在识别与叠加之后，只影响 TFT 预览，不污染识别）：
  * 密虚线 = 三色分类下限（底部 BALL_DETECT_Y_BOTTOM_PCT 车体屏蔽边界）；
- * 稀疏虚线 = 绿角标新轨迹建立上限；已确认终点仍可向下跟踪。 */
+ * 稀疏虚线 = 黑终点新轨迹建立上限；已确认终点仍可向下跟踪。 */
 static void draw_detect_boundaries(uint8_t *rgb, int w, int h)
 {
     const int y_ball = h - h * BALL_DETECT_Y_BOTTOM_PCT / 100;
@@ -483,7 +483,7 @@ static void processing_task(void *args)
 
         detect_line_centroid(rgb_buf, jpeg_out.width, jpeg_out.height, &s_result);
 
-        /* 找球任务目标识别（红球/蓝球/绿角标），结果供 ball_task 读取。
+        /* 找球任务目标识别（红球/蓝球/黑终点），结果供 ball_task 读取。
          * 成本 ~1ms/帧，始终运行；巡线阶段上层不读即可。 */
         static int ball_w = -1, ball_h = -1;
         if (ball_w != (int)jpeg_out.width || ball_h != (int)jpeg_out.height) {
@@ -528,8 +528,8 @@ static void processing_task(void *args)
         taskEXIT_CRITICAL(&s_observation_mux);
         s_streaming = true;
 
-        /* 识别结果叠加方框：红球黄框 / 蓝球绿框 / 角标紫框（显示色，
-         * 实物为绿色——紫框与蓝球的绿框区分不同目标））。
+        /* 识别结果叠加方框：红球黄框 / 蓝球绿框 / 黑终点紫框（显示色，
+         * 紫框用于与黑色实物和蓝球绿框形成明显对比）。
          * 球不用白框，避免包围盒外沿落在白色赛道上后不可见。 */
         draw_blob_box(rgb_buf, jpeg_out.width, jpeg_out.height,
                       &s_ball_field.red_ball, 255, 255, 0);

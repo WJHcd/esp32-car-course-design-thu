@@ -163,7 +163,7 @@ static void app_camera_preview(void)
 /*
  * 球体纯识别模式：不初始化 walking/encoder/ultrasonic，确保电机不会动作。
  * TFT 等比例显示完整摄像头画面：红球黄框（原黑球角色，2026-09-03 改实物）、
- * 蓝球绿框、绿角标紫框（显示色；紫框与蓝球的绿框区分）。
+ * 蓝球绿框、黑终点紫框（紫色只是叠加框颜色）。
  * 串口同时输出 detected/位置/面积和颜色掩膜，便于现场标定阈值。
  */
 static void app_ball_detect_test(void)
@@ -181,7 +181,7 @@ static void app_ball_detect_test(void)
     camera_line_set_frame_cb(tft_st7735_show_camera_frame);
 
     printf("\n========== 红球/蓝球纯识别测试（MODE 9） ==========\n");
-    printf("电机未初始化，不会移动。TFT：红球黄框、蓝球绿框、绿角标紫框。\n");
+    printf("电机未初始化，不会移动。TFT：红球黄框、蓝球绿框、黑终点紫框。\n");
     printf("画面采用完整等比例缩放，左右边缘目标不会被裁掉。\n\n");
 
     uint32_t last_frame_seq = UINT32_MAX;
@@ -209,7 +209,7 @@ static void app_ball_detect_test(void)
                    (unsigned long)balls.blue_ball.cell_count,
                    balls.marker_count);
             for (int i = 0; i < balls.marker_count; i++) {
-                printf("         绿终点[%d] x=%.2f y=%.2f %ux%u cells=%lu\n",
+                printf("         黑终点[%d] x=%.2f y=%.2f %ux%u cells=%lu\n",
                        i, (double)balls.marker[i].x_ratio,
                        (double)balls.marker[i].y_ratio,
                        balls.marker[i].width_px, balls.marker[i].height_px,
@@ -221,21 +221,22 @@ static void app_ball_detect_test(void)
         if (now_ms - last_ascii_ms >= 1000u) {
             last_ascii_ms = now_ms;
             int gmn, gmx, gavg;
-            uint32_t red_px, blue_px, green_px;
+            uint32_t red_px, blue_px, marker_px;
             ball_detect_get_gray_diag(&gmn, &gmx, &gavg,
-                                      &red_px, &blue_px, &green_px);
-            printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
+                                      &red_px, &blue_px, &marker_px);
+            printf("[color] gray=%d..%d avg=%d 红px=%lu 蓝px=%lu 黑终点px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)red_px,
-                   (unsigned long)blue_px, (unsigned long)green_px);
+                   (unsigned long)blue_px, (unsigned long)marker_px);
             ball_marker_diag_t md;
             ball_detect_get_marker_diag(&md);
-            printf("[green] cells=%u raw=%u reject(shape=%u fringe=%u body=%u) pending=%u confirmed=%u\n",
+            printf("[black-marker] cells=%u raw=%u reject(shape=%u surround=%u fringe=%u geometry=%u) pending=%u confirmed=%u\n",
                    md.occupied_cells, md.raw_candidates, md.rejected_shape,
+                   md.rejected_surround,
                    md.rejected_ball_fringe, md.rejected_body_or_geometry,
                    md.pending_tracks, md.confirmed_markers);
             char view[1400];
             ball_detect_debug_ascii(view, (int)sizeof(view));
-            printf("[mask] R=红球 L=蓝球 G=角标 .=空白\n%s", view);
+            printf("[mask] R=红球 L=蓝球 M=黑终点候选 .=空白\n%s", view);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -303,7 +304,7 @@ void app_ball_task_test(void)
 
     printf("\n========== 找球/推球任务独立测试（MODE 8，三点一线法） ==========\n");
     printf("云台抬起后固定；SURVEY 默认静止，连续 3 帧确认球。\n");
-    printf("球和绿色终点同帧稳定后，ALIGN/PUSH 均按：短动作→刹停→新帧。\n");
+    printf("球和黑色终点同帧稳定后，ALIGN/PUSH 均按：短动作→刹停→新帧。\n");
     printf("TFT 预览限 4fps；视觉处理帧率以串口 frame 变化为准。\n\n");
 
     /* 摄像头画面实时上屏：直观看摄像头视野里有什么 */
@@ -358,14 +359,15 @@ void app_ball_task_test(void)
             int gmn, gmx, gavg;
             uint32_t rp, up, bp;
             ball_detect_get_gray_diag(&gmn, &gmx, &gavg, &rp, &up, &bp);
-            printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 绿px=%lu\n",
+            printf("[gray] min=%d max=%d avg=%d 红px=%lu 蓝px=%lu 黑终点px=%lu\n",
                    gmn, gmx, gavg, (unsigned long)rp, (unsigned long)up,
                    (unsigned long)bp);
             ball_marker_diag_t md;
             ball_detect_get_marker_diag(&md);
-            printf("[green] px=%lu cells=%u raw=%u reject(shape=%u fringe=%u body=%u) pending=%u confirmed=%u\n",
-                   (unsigned long)md.raw_green_pixels, md.occupied_cells,
+            printf("[black-marker] px=%lu cells=%u raw=%u reject(shape=%u surround=%u fringe=%u geometry=%u) pending=%u confirmed=%u\n",
+                   (unsigned long)md.raw_marker_pixels, md.occupied_cells,
                    md.raw_candidates, md.rejected_shape,
+                   md.rejected_surround,
                    md.rejected_ball_fringe, md.rejected_body_or_geometry,
                    md.pending_tracks, md.confirmed_markers);
             char view[1400];
