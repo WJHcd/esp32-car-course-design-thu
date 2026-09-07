@@ -78,6 +78,8 @@ typedef enum {
                                             * 克服不了静摩擦（2026-09-03 反馈文档） */
 #define BALL_ALIGN_KICK_MAX_MS     160u    /* 最大踢转，动作后必须停车复拍 */
 #define BALL_ACTION_SETTLE_MS      100u    /* 每个短动作后先刹停，再等新帧 */
+#define BALL_ACTION_WAIT_MAX_MS    600u    /* 等新帧上限：相机卡死时强制交还
+                                            * 决策权刹停，防 keep_drive 盲走 */
 #define BALL_CAMERA_STALE_MS       500u    /* 超过此时长无新视觉结果立即停车 */
 #define BALL_LOST_CONFIRM_FRAMES     4     /* 连续不同帧丢球才进入恢复 */
 #define BALL_ALIGN_RECAPTURE_MAX     1     /* 球近车头时最多一次短倒车找回 */
@@ -101,7 +103,8 @@ typedef enum {
 #define BALL_PUSH_STEER_GAIN        10.0f  /* 转向修正：x 偏差 → 转向 %
                                             * （2026-09-03 实车 8 转弯无力→10） */
 #define BALL_PUSH_ALIGN_STRAFE_PCT 12      /* 纯横移短动作；须越过后轮死区 */
-#define BALL_PUSH_STEP_MS          200u    /* 每次只推进一段，随后停车等新帧 */
+#define BALL_PUSH_STEP_MS          400u    /* 每次推进一段；段末不刹停滚入等帧窗口，
+                                            * 保住动量（实测 200ms 段+刹停车起不了步） */
 #define BALL_PUSH_BLIND_STEP_MS    150u    /* 近车头刚丢球时最多补推一次 */
 #define BALL_PUSH_MAX_DRIVE_MS      5000u  /* 单球实际推进指令累计上限；到顶 ABORT */
 #define BALL_PUSH_TIMEOUT_MS        15000u /* 单球墙钟超时；到点 ABORT */

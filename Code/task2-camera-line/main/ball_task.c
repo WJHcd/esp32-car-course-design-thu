@@ -70,6 +70,8 @@ typedef struct {
     uint32_t until_ms;
     uint32_t wait_frame_seq;
     const char *reason;
+    bool keep_drive;       /* 动作到期后不刹停，保持原指令滚到下一新帧
+                              （推球段用：段间刹清动量导致车始终起不了步） */
 } action_ctx_t;
 
 static action_ctx_t s_action;
@@ -233,7 +235,7 @@ static void reset_action(void)
 
 static void begin_action(float forward, float turn, float strafe,
                          uint32_t duration_ms, uint32_t now_ms,
-                         const char *reason)
+                         const char *reason, bool keep_drive)
 {
     s_action.phase = ACTION_MOVE;
     s_action.forward = forward;
@@ -241,6 +243,7 @@ static void begin_action(float forward, float turn, float strafe,
     s_action.strafe = strafe;
     s_action.until_ms = now_ms + duration_ms;
     s_action.reason = reason;
+    s_action.keep_drive = keep_drive;
     ESP_LOGI(TAG, "动作 %-14s F=%+.0f T=%+.0f S=%+.0f dur=%lu ms",
              reason, (double)forward, (double)turn, (double)strafe,
              (unsigned long)duration_ms);
@@ -256,6 +259,12 @@ static bool service_action(const camera_line_result_t *cam, uint32_t now_ms)
         if (now_ms < s_action.until_ms) {
             walking_direct_command(s_action.forward, s_action.turn,
                                    s_action.strafe);
+        } else if (s_action.keep_drive) {
+            /* 推球段：到期不刹停，保持原指令滚入等帧窗口——段间刹清
+             * 动量会让车每段都从静止对抗静摩擦，实测 20 段推不动。 */
+            s_action.phase = ACTION_WAIT_NEW_FRAME;
+            s_action.wait_frame_seq = cam->frame_seq;
+            s_action.until_ms = now_ms + BALL_ACTION_WAIT_MAX_MS;
         } else {
             walking_direct_command(0, 0, 0);
             s_action.phase = ACTION_BRAKE_SETTLE;
@@ -268,12 +277,26 @@ static bool service_action(const camera_line_result_t *cam, uint32_t now_ms)
         if (now_ms >= s_action.until_ms) {
             s_action.phase = ACTION_WAIT_NEW_FRAME;
             s_action.wait_frame_seq = cam->frame_seq;
+            s_action.until_ms = now_ms + BALL_ACTION_WAIT_MAX_MS;
         }
         return true;
 
     case ACTION_WAIT_NEW_FRAME:
-        walking_direct_command(0, 0, 0);
+        /* keep_drive 期间保持原指令滚动；超时（相机卡死/丢帧）强制
+         * 交还决策权——PUSH 主流程会因无新帧而刹停。 */
+        if (s_action.keep_drive) {
+            walking_direct_command(s_action.forward, s_action.turn,
+                                   s_action.strafe);
+        } else {
+            walking_direct_command(0, 0, 0);
+        }
         if (cam->frame_seq != s_action.wait_frame_seq) {
+            reset_action();
+            return false;
+        }
+        if (now_ms >= s_action.until_ms) {
+            ESP_LOGW(TAG, "动作 %s 等新帧超时 %s", s_action.reason,
+                     s_action.keep_drive ? "强制刹停" : "放弃等待");
             reset_action();
             return false;
         }
@@ -602,7 +625,7 @@ void ball_task_update(const camera_line_result_t *cam,
                 s_align_lost_frames = 0;
                 begin_action(-BALL_ALIGN_RECAPTURE_PCT, 0, 0,
                              BALL_ALIGN_RECAPTURE_MS, now_ms,
-                             "ALIGN_RECAPTURE");
+                             "ALIGN_RECAPTURE", false);
             } else {
                 ESP_LOGW(TAG, "对准中连续 %u 帧未见%s，停车重新观察",
                          (unsigned)s_align_lost_frames,
@@ -647,7 +670,7 @@ void ball_task_update(const camera_line_result_t *cam,
             const float strafe = -BALL_ALIGN_STRAFE_SIGN *
                 (e > 0.0f ? BALL_ALIGN_STRAFE_PCT : -BALL_ALIGN_STRAFE_PCT);
             begin_action(0, 0, strafe, strafe_duration_ms(e), now_ms,
-                         "ALIGN_STRAFE");
+                         "ALIGN_STRAFE", false);
         } else {
             /* 两目标分居画面两侧、pair_off 恰好接近 0 时，旧写法会因
              * “0 不大于 0”固定选择负方向，形成明显左右不对称。此时
@@ -661,7 +684,7 @@ void ball_task_update(const camera_line_result_t *cam,
             const float turn = (turn_off > 0.0f)
                 ? BALL_ALIGN_KICK_TURN_PCT : -BALL_ALIGN_KICK_TURN_PCT;
             begin_action(0, turn, 0, kick_duration_ms(turn_off), now_ms,
-                         "ALIGN_TURN");
+                         "ALIGN_TURN", false);
         }
         break;
     }
@@ -761,7 +784,7 @@ void ball_task_update(const camera_line_result_t *cam,
                 s_push_drive_ms += BALL_PUSH_BLIND_STEP_MS;
                 begin_action(BALL_PUSH_SPEED_PCT, 0, 0,
                              BALL_PUSH_BLIND_STEP_MS, now_ms,
-                             "PUSH_LAST_STEP");
+                             "PUSH_LAST_STEP", true);
             } else if (s_seen[s_current].y_ratio >= BALL_NEAR_Y_ARRIVE_LOST) {
                 ESP_LOGW(TAG, "%s 近车头连续丢失，短倒车重新捕获",
                          s_color_name[s_current]);
@@ -792,7 +815,7 @@ void ball_task_update(const camera_line_result_t *cam,
                 (e > 0.0f ? BALL_PUSH_ALIGN_STRAFE_PCT
                           : -BALL_PUSH_ALIGN_STRAFE_PCT);
             begin_action(0, 0, strafe, strafe_duration_ms(e), now_ms,
-                         "PUSH_REALIGN");
+                         "PUSH_REALIGN", false);
             break;
         }
         s_push_steer_target = marker->x_ratio;
@@ -802,7 +825,7 @@ void ball_task_update(const camera_line_result_t *cam,
             const float turn = off > 0.0f ? BALL_ALIGN_KICK_TURN_PCT
                                          : -BALL_ALIGN_KICK_TURN_PCT;
             begin_action(0, turn, 0, kick_duration_ms(off), now_ms,
-                         "PUSH_CENTER");
+                         "PUSH_CENTER", false);
             break;
         }
 
@@ -811,7 +834,7 @@ void ball_task_update(const camera_line_result_t *cam,
             cruise, (int)((ball->x_ratio - 0.5f) * BALL_PUSH_STEER_GAIN));
         s_push_drive_ms += BALL_PUSH_STEP_MS;
         begin_action(cruise, turn, 0, BALL_PUSH_STEP_MS, now_ms,
-                     "PUSH_STEP");
+                     "PUSH_STEP", true);
         break;
     }
 
