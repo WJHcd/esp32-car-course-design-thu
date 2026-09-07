@@ -77,6 +77,23 @@ static inline uint8_t pixel_gray(uint8_t r, uint8_t g, uint8_t b)
                       (uint16_t)b * 29u) >> 8);
 }
 
+/* ball_detect 对外统一使用与 TFT 所见一致的逻辑 y：上小下大。
+ * 当前 JPEG 缓冲在 TFT 上下方向相反，因此取像素时映射回源帧行。 */
+static inline int source_y_from_logical(int logical_y)
+{
+#if BALL_DETECT_FLIP_Y
+    return s_height - 1 - logical_y;
+#else
+    return logical_y;
+#endif
+}
+
+static inline const uint8_t *logical_pixel(const uint8_t *rgb, int x, int y)
+{
+    const int src_y = source_y_from_logical(y);
+    return rgb + ((size_t)src_y * s_width + x) * 3;
+}
+
 /* ---- 形态学腐蚀（8 邻域，邻居 <5 个的格子剔除）：细长线段/边界被
  * 侵蚀消失，实心球团保留核心——空间上切断"球与线粘连"的连通域 ---- */
 static void erode_grid(color_grid_t *g)
@@ -263,7 +280,7 @@ static bool marker_has_light_surround(const uint8_t *rgb,
                 x >= m->x_min_px + m->width_px ||
                 y < m->y_min_px || y >= m->y_min_px + m->height_px;
             if (!outside) continue;
-            const uint8_t *p = rgb + ((size_t)y * s_width + x) * 3;
+            const uint8_t *p = logical_pixel(rgb, x, y);
             samples++;
             if (pixel_gray(p[0], p[1], p[2]) >=
                 BALL_MARKER_SURROUND_GRAY_MIN) light++;
@@ -495,11 +512,10 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
             for (int py = 0; py < BALL_GRID_DIV; py++) {
                 const int y = gy * BALL_GRID_DIV + py;
                 if (y >= s_height || y >= y_max) break;
-                const uint8_t *row = rgb + (size_t)y * s_width * 3;
                 for (int px = 0; px < BALL_GRID_DIV; px++) {
                     const int x = gx * BALL_GRID_DIV + px;
                     if (x >= s_width) break;
-                    const uint8_t *p = row + (size_t)x * 3;
+                    const uint8_t *p = logical_pixel(rgb, x, y);
                     const int cls = pixel_class(p[0], p[1], p[2]);
                     switch (cls) {
                     case 1: blue++; tot_blue++; break;
@@ -562,9 +578,8 @@ void ball_detect_process_rgb888(const uint8_t *rgb, ball_field_result_t *out)
         const int x0 = s_width / 3, x1 = s_width * 2 / 3;
         const int y0 = s_height / 3, y1 = s_height * 2 / 3;
         for (int y = y0; y < y1; y += 4) {
-            const uint8_t *row = rgb + (size_t)y * s_width * 3;
             for (int x = x0; x < x1; x += 4) {
-                const uint8_t *p = row + (size_t)x * 3;
+                const uint8_t *p = logical_pixel(rgb, x, y);
                 const int g = (p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8;
                 sum += g;
                 n++;

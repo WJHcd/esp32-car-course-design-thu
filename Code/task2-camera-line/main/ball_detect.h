@@ -71,9 +71,9 @@
 #define BALL_MARKER_TRACK_MATCH_X         0.12f
 #define BALL_MARKER_TRACK_MATCH_Y         0.12f
 #define BALL_MARKER_NEW_TRACK_Y_MIN       0.05f /* 极上方仍视为场外背景 */
-/* 新目标可在画面 5%~68% 建立，兼容摄像头视角下调；底部 30% 硬屏蔽
+/* 新目标可在画面 5%~69% 建立，兼容摄像头视角下调；底部 30% 硬屏蔽
  * 仍阻止车壳建立假轨迹，已确认终点可跟踪到 y=0.70 识别边界。 */
-#define BALL_MARKER_NEW_TRACK_Y_MAX       0.68f
+#define BALL_MARKER_NEW_TRACK_Y_MAX       0.69f
 #define BALL_MARKER_BELOW_BALL_TOL        0.08f
 #define BALL_MARKER_ASPECT_MAX            3.0f
 #define BALL_MARKER_FILL_MIN              0.55f
@@ -85,8 +85,12 @@
  * 成像远大于此，完成判定不受影响）。 */
 #define BALL_MARKER_FRINGE_MAX_CELLS 6
 
-/* ---- 检测区域 ----
- * 画面底部此百分比【不参与找球识别】：云台 35° 抬起时车头/车身自身
+/* ---- 检测区域与上下方向 ----
+ * 当前 TFT 的 MADCTL 使屏幕所见 y 与 JPEG 缓冲 y 相反。目标识别统一用
+ * “屏幕上方 y=0、屏幕下方 y=1”的逻辑坐标；读取源帧和画框时做一次
+ * y 反变换。只影响球/终点，不改已实车标定的摄像头巡线扫描带。 */
+#define BALL_DETECT_FLIP_Y 1
+/* 屏幕画面底部此百分比【不参与找球识别】：云台 35° 抬起时车头/车身自身
  * 占据画面下方约 30%（2026-09-03 实测修正，曾按 20% 低估），其颜色
  * （棕/暗）会污染球分类。球实际可见区 y ∈ [0, 0.70]——对准/推球的
  * 近距判定（0.65）必须留在此边界之内，否则车会顶着球走。 */

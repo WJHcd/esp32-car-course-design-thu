@@ -23,8 +23,12 @@
 - `BALL_MARKER_FILL_MIN=0.55`、`BALL_MARKER_ASPECT_MAX=3.0`：实心度和最大宽高比。
 - `BALL_MARKER_SURROUND_GRAY_MIN=145`、`BALL_MARKER_SURROUND_LIGHT_PCT=40`：
   放宽后的白地包围条件，仍用于排除暗背景中的桌椅。
-- `BALL_MARKER_NEW_TRACK_Y_MIN/MAX=0.05/0.68`：新目标中心可在原图 5%～68%
-  高度建立；确认后可继续跟到 70% 检测边界。
+- `BALL_MARKER_NEW_TRACK_Y_MIN/MAX=0.05/0.69`：新目标中心可在屏幕所见画面的
+  5%～69% 高度建立；确认后可继续跟到 70% 检测边界。
+
+当前 TFT 显示方向与 JPEG 缓冲的 y 方向相反，`BALL_DETECT_FLIP_Y=1` 会让球和
+终点识别统一使用屏幕所见坐标。显示屏仅画一条白色虚线，虚线以下才是被截掉的
+底部 30% 车壳区域，虚线上方是有效检测区。该变换不修改摄像头巡线扫描带。
 
 先使用 MODE9，单独放置黑终点测试近、中、远距离，再加入球、巡线和黑色桌椅。
 真终点应在连续约 2～3 个处理帧后出现紫框。检测层允许无球时出框，但 MODE8

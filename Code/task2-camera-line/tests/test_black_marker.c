@@ -7,8 +7,10 @@
 static uint8_t rgb[240 * 160 * 3];
 static ball_field_result_t field;
 
+/* 测试输入按 TFT 所见的逻辑坐标描述，再写到上下反向的 JPEG 缓冲。 */
 static void rect(int x, int y, int w, int h, int r, int g, int b)
 {
+    y = 160 - y - h;
     for (int yy = y; yy < y + h; yy++) {
         for (int xx = x; xx < x + w; xx++) {
             uint8_t *p = rgb + (yy * 240 + xx) * 3;
@@ -51,10 +53,14 @@ int main(void)
                d.confirmed_markers);
     }
     assert(field.marker_count == 1);
+    assert(field.marker[0].y_ratio < field.red_ball.y_ratio);
 
     /* 检测层允许无球时独立出框；控制层仍不会无球开车。 */
     reset(); rect(100, 40, 24, 20, 35, 35, 35);
     frames(2); assert(field.marker_count == 1);
+    add_red_ball(); frames(1);
+    assert(field.red_ball.detected && field.marker_count == 1);
+    assert(field.marker[0].y_ratio < field.red_ball.y_ratio);
 
     /* 放宽后的 115 灰度可识别；远端 8x8 小块需连续 3 帧。 */
     reset(); rect(100, 40, 24, 20, 115, 115, 115);

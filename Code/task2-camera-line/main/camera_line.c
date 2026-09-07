@@ -362,6 +362,15 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
     if (y1 >= h) y1 = h - 1;
     if (x1 <= x0 || y1 <= y0) return;
 
+#if BALL_DETECT_FLIP_Y
+    /* ball_detect 输出的是与 TFT 所见一致的逻辑 y，叠框写回 JPEG 缓冲
+     * 前必须反变换；否则检测正确但框会画到上下相反的位置。 */
+    const int src_y0 = h - 1 - y1;
+    const int src_y1 = h - 1 - y0;
+    y0 = src_y0;
+    y1 = src_y1;
+#endif
+
     for (int x = x0; x <= x1; x++) {
         for (int k = 0; k < thickness && y0 + k <= y1 - k; k++) {
             uint8_t *pa = rgb + (size_t)(y0 + k) * w * 3 + (size_t)x * 3;
@@ -380,22 +389,19 @@ static void draw_blob_box(uint8_t *rgb, int w, int h,
     }
 }
 
-/* 检测区调试辅助线（画在识别与叠加之后，只影响 TFT 预览，不污染识别）：
- * 密虚线 = 三色分类下限（底部 BALL_DETECT_Y_BOTTOM_PCT 车体屏蔽边界）；
- * 稀疏虚线 = 黑终点新轨迹建立上限；已确认终点仍可向下跟踪。 */
+/* 检测区调试线（只影响 TFT，不污染识别）：屏幕白色虚线以下是车体
+ * 屏蔽区，不参与球和终点检测。只画这一条，避免两条相邻线混淆。 */
 static void draw_detect_boundaries(uint8_t *rgb, int w, int h)
 {
-    const int y_ball = h - h * BALL_DETECT_Y_BOTTOM_PCT / 100;
-    if (y_ball >= 1 && y_ball < h - 1) {
+    const int logical_y = h - h * BALL_DETECT_Y_BOTTOM_PCT / 100;
+#if BALL_DETECT_FLIP_Y
+    const int frame_y = h - 1 - logical_y;
+#else
+    const int frame_y = logical_y;
+#endif
+    if (frame_y >= 1 && frame_y < h - 1) {
         for (int x = 0; x < w; x += 2) {
-            uint8_t *p = rgb + ((size_t)y_ball * w + x) * 3;
-            p[0] = 255; p[1] = 255; p[2] = 255;
-        }
-    }
-    const int y_marker = (int)(h * BALL_MARKER_NEW_TRACK_Y_MAX);
-    if (y_marker >= 1 && y_marker < h - 1) {
-        for (int x = 0; x < w; x += 6) {
-            uint8_t *p = rgb + ((size_t)y_marker * w + x) * 3;
+            uint8_t *p = rgb + ((size_t)frame_y * w + x) * 3;
             p[0] = 255; p[1] = 255; p[2] = 255;
         }
     }
