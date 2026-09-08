@@ -98,8 +98,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 
 /* ------------------------ 控制参数区 ------------------------ */
 /* 直线基准速度（2026-09-01 现场 16→15；2026-09-04 用户要求 +0.5 → 15.5）；
- * 弯道前进按 15.5-|turn|/2 联动 */
-#define LINE_BASE_SPEED_PCT       15.5f
+ * 弯道前进按 15.2-|turn|/2 联动（2026-09-04 用户要求 15.5→15.2） */
+#define LINE_BASE_SPEED_PCT       15.2f
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -232,8 +232,8 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 超声 18cm 触发时车头距板约 18cm。
  *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
  *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
-#define AVOID_STRAFE_DIST_CM    19.0f   /* 左移总距离（2026-09-04 用户定稿：
-                                            * 22 过头回调；速度 13% 保持不变） */
+#define AVOID_STRAFE_DIST_CM    17.0f   /* 左移总距离（2026-09-04 用户定稿：
+                                            * 19 仍偏长 → 17；速度 13% 不变） */
 #define AVOID_FORWARD_DIST_CM   18.0f   /* 前进越过距离（2026-09-04 用户要求
                                             * 14→18 增大，与左移步进一致） */
 
@@ -265,11 +265,12 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 /* 左移转向偏置（2026-09-04 新增）：增益微调（±0.05 ≈ B 轮 5%）在死区
  * 噪声里看不出来，改用加法式直接修 yaw——负值 = 逆时针修正，压顺时针
  * 自旋。现场规则：仍顺时针 → 更负（-4、-5）；变逆时针 → 往回加。 */
-#define AVOID_STRAFE_TURN_TRIM_PCT 0     /* 2026-09-04 实车 -1 仍轻微逆时针 → 归零观察 */
-/* 找线右移速度（2026-09-01 10→11）：现场要求提速 1 档；自旋由
- * STRAFE_B_GAIN_FIND 专用增益抑制（速度变化后如自旋方向/强度变化，
- * 对该值做 ±0.05 微调即可） */
-#define AVOID_FIND_STRAFE_PCT    11
+#define AVOID_STRAFE_TURN_TRIM_PCT 0.5f   /* 2026-09-04 用户定稿：0 与 +1 之间取
+                                            * 0.5（0 逆时针、+1 顺时针的中间值） */
+/* 找线右移速度（2026-09-01 10→11；2026-09-04 用户要求再提速 → 12）：
+ * 自旋由 STRAFE_B_GAIN_FIND 专用增益抑制（速度变化后如自旋方向/强度
+ * 变化，对该值做 ±0.05 微调即可） */
+#define AVOID_FIND_STRAFE_PCT    13
 #define AVOID_FORWARD_SPEED_PCT  15     /* 避障前进速度档 */
 #define AVOID_FIND_SPEED_PCT     10     /* 找线前进速度档 */
 #define AVOID_SCAN_TURN_PCT       5     /* 找线扫描转向幅度 */

@@ -83,7 +83,8 @@ typedef enum {
 #define BALL_LOST_CONFIRM_FRAMES     4     /* 连续不同帧丢球才进入恢复 */
 /* 丢球恢复（2026-09-04 用户定稿）：先连续后退 1.5s（后退中见球即恢复
  * 推球），退完仍无球 → 顺时针脉冲自转找球（转 250ms、隔 1.5s）。 */
-#define BALL_ALIGN_BACKUP_MS       1500u   /* 丢球后连续后退时长 */
+#define BALL_ALIGN_BACKUP_MS       1200u   /* 丢球后连续后退时长（2026-09-04
+                                            * 用户要求 1.5s→1.2s） */
 #define BALL_ALIGN_BWD_PCT         17      /* 后退速度 */
 #define BALL_ALIGN_SEARCH_TURN_MS  400u    /* 自转一次的幅度：400ms（普通脉冲
                                             * 250ms；2026-09-04 用户要求幅度
