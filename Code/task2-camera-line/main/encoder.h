@@ -10,6 +10,16 @@ typedef struct {
     bool valid[MOTOR_NUM];
 } encoder_rpm_t;
 
+/* 同一次采样的原始上升沿数；用于横移轮速比例/停转诊断，不使用显示低通。 */
+typedef struct {
+    uint32_t sequence;
+    uint32_t sample_ms;
+    uint32_t interval_ms;
+    int32_t pulses[MOTOR_NUM];
+} encoder_motion_t;
+
+encoder_motion_t encoder_get_motion(void);
+
 /** 初始化三路 PCNT 脉冲计数器。初始化后不驱动电机。 */
 void encoder_init(void);
 
@@ -25,7 +35,7 @@ encoder_rpm_t encoder_get_rpm(void);
 /*
  * 里程计：编码器累计脉冲（单相计数无方向，正反转都累加）。
  * 由 encoder_update() 采样时累计——调用方需周期调用 encoder_update()
- * （内部 200ms 限速，频繁调用无害；TFT 遥测任务也会调用）。
+ * （内部 200ms 限速，并用互斥锁串行化；TFT/行走/球任务可同时调用）。
  * 未标定 PPR 也可用：只用于"前进多少脉冲就退回多少脉冲"的相对里程。
  */
 /** 里程计清零（进入某段行程时调用）。 */

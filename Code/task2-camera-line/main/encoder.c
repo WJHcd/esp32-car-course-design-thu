@@ -5,6 +5,9 @@
 #include "esp_timer.h"
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 /*
  * 每个轮胎转一整圈所对应的“编码器 A 相上升沿”数。
@@ -30,12 +33,16 @@ static encoder_rpm_t s_snapshot;
 static int32_t s_odom[MOTOR_NUM];
 static int64_t s_last_sample_us;
 static bool s_initialized;
+static SemaphoreHandle_t s_lock;
+static encoder_motion_t s_motion;
 
 void encoder_init(void)
 {
     if (s_initialized) {
         return;
     }
+    s_lock = xSemaphoreCreateMutex();
+    configASSERT(s_lock != NULL);
 
     for (int i = 0; i < MOTOR_NUM; i++) {
         const pcnt_unit_config_t unit_cfg = {
@@ -76,10 +83,13 @@ void encoder_update(void)
     if (!s_initialized) {
         return;
     }
+    /* TFT 与球任务均可能调用采样，避免重复读/清 PCNT 和里程互相覆盖。 */
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return;
 
     const int64_t now_us = esp_timer_get_time();
     const int64_t elapsed_us = now_us - s_last_sample_us;
     if (elapsed_us < ENCODER_SAMPLE_MIN_US) {
+        xSemaphoreGive(s_lock);
         return;
     }
 
@@ -89,6 +99,7 @@ void encoder_update(void)
         ESP_ERROR_CHECK(pcnt_unit_clear_count(s_units[i]));
 
         s_odom[i] += (pulse_count < 0) ? -pulse_count : pulse_count;
+        s_motion.pulses[i] = abs(pulse_count);
 
         const float raw_rpm = fabsf((float)pulse_count) * 60000000.0f /
                               (s_encoder_ppr[i] * (float)elapsed_us);
@@ -100,16 +111,40 @@ void encoder_update(void)
     }
 
     s_last_sample_us = now_us;
+    s_motion.interval_ms = (uint32_t)(elapsed_us / 1000);
+    s_motion.sample_ms = (uint32_t)(now_us / 1000);
+    s_motion.sequence++;
+    xSemaphoreGive(s_lock);
 }
 
 encoder_rpm_t encoder_get_rpm(void)
 {
-    return s_snapshot;
+    if (!s_initialized) return (encoder_rpm_t){0};
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    encoder_rpm_t result = s_snapshot;
+    xSemaphoreGive(s_lock);
+    return result;
+}
+
+encoder_motion_t encoder_get_motion(void)
+{
+    if (!s_initialized) return (encoder_motion_t){0};
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    encoder_motion_t result = s_motion;
+    xSemaphoreGive(s_lock);
+    return result;
 }
 
 void encoder_odom_reset(void)
 {
+    if (!s_initialized) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
     memset(s_odom, 0, sizeof(s_odom));
+    for (int i = 0; i < MOTOR_NUM; i++) {
+        ESP_ERROR_CHECK(pcnt_unit_clear_count(s_units[i]));
+    }
+    s_last_sample_us = esp_timer_get_time();
+    xSemaphoreGive(s_lock);
 }
 
 int32_t encoder_odom_get(int motor)
@@ -117,5 +152,9 @@ int32_t encoder_odom_get(int motor)
     if (motor < 0 || motor >= MOTOR_NUM) {
         return 0;
     }
-    return s_odom[motor];
+    if (!s_initialized) return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int32_t value = s_odom[motor];
+    xSemaphoreGive(s_lock);
+    return value;
 }
