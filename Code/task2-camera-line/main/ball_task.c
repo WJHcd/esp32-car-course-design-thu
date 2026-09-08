@@ -69,6 +69,8 @@ typedef struct {
     float strafe;
     uint32_t until_ms;
     uint32_t wait_frame_seq;
+    uint32_t hold_ms;      /* 动作后的刹停/停看时长（默认 SETTLE；
+                              旋转搜索用 1.5s 停顿方便找球） */
     const char *reason;
     bool keep_drive;       /* 动作到期后不刹停，保持原指令滚到下一新帧
                               （推球段用：段间刹清动量导致车始终起不了步） */
@@ -76,7 +78,10 @@ typedef struct {
 
 static action_ctx_t s_action;
 static uint8_t s_align_lost_frames;
-static uint8_t s_align_recapture_count;
+static uint8_t s_align_recover_phase;    /* 丢球恢复：0=正常 1=后退中 2=顺时针自转找球 */
+static bool s_red_pri_done;              /* 红球优先衔接已完成（每轮任务一次） */
+static int s_red_pri_confirm;            /* 红球居中连续确认帧 */
+static uint8_t s_red_pri_lost;           /* 红球连续不可见帧（闪断刹停用） */
 static bool s_push_blind_step_used;
 static bool s_camera_stale_logged;
 static uint32_t s_push_done_pending_ms;  /* 0 = 无待确认；非 0 = 到位待静止确认 */
@@ -242,6 +247,7 @@ static void begin_action(float forward, float turn, float strafe,
     s_action.turn = turn;
     s_action.strafe = strafe;
     s_action.until_ms = now_ms + duration_ms;
+    s_action.hold_ms = BALL_ACTION_SETTLE_MS;   /* 默认刹停 100ms，可按动作覆盖 */
     s_action.reason = reason;
     s_action.keep_drive = keep_drive;
     ESP_LOGI(TAG, "动作 %-14s F=%+.0f T=%+.0f S=%+.0f dur=%lu ms",
@@ -267,8 +273,10 @@ static bool service_action(const camera_line_result_t *cam, uint32_t now_ms)
             s_action.until_ms = now_ms + BALL_ACTION_WAIT_MAX_MS;
         } else {
             walking_direct_command(0, 0, 0);
+            /* 刹停/停看窗口由 hold_ms 决定（默认 SETTLE 100ms；
+             * 旋转搜索覆盖为 1.5s 停顿，方便小车找球）。 */
             s_action.phase = ACTION_BRAKE_SETTLE;
-            s_action.until_ms = now_ms + BALL_ACTION_SETTLE_MS;
+            s_action.until_ms = now_ms + s_action.hold_ms;
         }
         return true;
 
@@ -350,7 +358,7 @@ static void set_state(ball_task_state_t st, uint32_t now_ms)
                  (long)s_return_target_pulses);
     } else if (st == BALL_TASK_ALIGN) {
         s_align_lost_frames = 0;
-        s_align_recapture_count = 0;
+        s_align_recover_phase = 0;   /* 全新对准：退出丢球恢复流程 */
         /* 重新锁定角标：上一球的目标关系不再适用 */
         s_marker_lock_valid = false;
         s_marker_lock_lost = 0;
@@ -372,8 +380,12 @@ void ball_task_start(uint32_t now_ms)
     s_last_frame_seq = 0;
     s_last_wait_log_ms = 0;
     s_camera_stale_logged = false;
+    s_red_pri_done = false;              /* 新一轮任务：红球优先衔接重新生效 */
+    s_red_pri_confirm = 0;
     reset_action();
     memset(s_seen, 0, sizeof(s_seen));
+    s_red_pri_done = false;              /* 新一轮任务：红球优先衔接重新生效 */
+    s_red_pri_confirm = 0;
     s_pending[TARGET_RED] = true;
     s_pending[TARGET_BLUE] = true;
     gimbal_set_tilt(BALL_TASK_TILT_SURVEY_DEG);   /* 抬云台获得俯视视角 */
@@ -532,6 +544,61 @@ void ball_task_update(const camera_line_result_t *cam,
         const bool creeping = BALL_SURVEY_CREEP_ENABLE &&
             since_ms(now_ms, s_state_enter_ms) >= BALL_SURVEY_CREEP_DELAY_MS;
 #endif
+        /* 红球优先衔接（2026-09-04 用户指定）：避障巡线后车身朝向偏右，
+         * 若不修正会先撞上右边的蓝球。此段在红球仍待推时生效：原地
+         * 逆时针旋转寻找红球 → 找到后转到画面中央 → 直接对准推红球。
+         * 红球推完（pending 清除）后此段自动失效，正常流程推蓝球；
+         * 20s 找不到红球则放弃优先，恢复正常等球流程。 */
+        if (s_pending[TARGET_RED] && !s_red_pri_done) {
+            if (!new_frame) {
+                break;
+            }
+            if (since_ms(now_ms, s_state_enter_ms) >= BALL_SURVEY_TIMEOUT_MS) {
+                ESP_LOGW(TAG, "红球优先衔接超时，放弃优先恢复正常流程");
+                s_red_pri_done = true;
+                break;
+            }
+            if (balls->red_ball.detected) {
+                const float off = balls->red_ball.x_ratio - 0.5f;
+                s_align_lost_frames = 0;
+                s_red_pri_lost = 0;
+                if (fabsf(off) > 0.15f) {
+                    /* 红球偏哪边就往哪边转，把它带到画面中央附近
+                     * （全速一步 ~17°，死区放宽到 15% 防帧间过冲） */
+                    walking_direct_command(0, (off > 0.0f ? 1 : -1) *
+                                              BALL_SURVEY_TURN_PCT, 0);
+                    s_red_pri_confirm = 0;
+                    break;
+                }
+                /* |off| ≤ 0.15：刹停防过冲，连续 2 帧确认即视为居中 */
+                walking_direct_command(0, 0, 0);
+                ++s_red_pri_confirm;
+                if (s_red_pri_confirm < 2) {
+                    break;                 /* 居中后再确认一帧，防抖 */
+                }
+                /* 红球已近似居中：锁定红球为目标，直接进入对准 */
+                s_current = TARGET_RED;
+                s_seen[TARGET_RED].confirm = BALL_SURVEY_CONFIRM;
+                s_seen[TARGET_RED].x_ratio = balls->red_ball.x_ratio;
+                s_seen[TARGET_RED].y_ratio = balls->red_ball.y_ratio;
+                s_seen[TARGET_RED].area_ratio = balls->red_ball.area_ratio;
+                s_red_pri_done = true;
+                ESP_LOGI(TAG, "红球优先衔接完成（已居中 x=%+.2f），直接对准推红球",
+                         (double)balls->red_ball.x_ratio);
+                set_state(BALL_TASK_ALIGN, now_ms);
+                break;
+            }
+            /* 本帧无红球：可能是检测闪断（上一帧已近居中）——先刹停
+             * 等一帧再判断；连续 3 帧确认真没有才恢复逆时针旋转寻找 */
+            ++s_red_pri_lost;
+            if (s_red_pri_lost < 3) {
+                walking_direct_command(0, 0, 0);
+                break;
+            }
+            s_red_pri_confirm = 0;
+            walking_direct_command(0, -BALL_SURVEY_TURN_PCT, 0);
+            break;
+        }
         if (new_frame && !rotating) {
             update_survey_sighting(TARGET_RED, &balls->red_ball);
             update_survey_sighting(TARGET_BLUE, &balls->blue_ball);
@@ -611,30 +678,43 @@ void ball_task_update(const camera_line_result_t *cam,
 
         const ball_blob_t *ball = pick_target_blob(balls);
         if (!ball->detected) {
-            if (s_align_lost_frames < UINT8_MAX) {
-                s_align_lost_frames++;
-            }
-            if (s_align_lost_frames < BALL_LOST_CONFIRM_FRAMES) {
+            if (s_align_recover_phase == 0) {
+                if (s_align_lost_frames < UINT8_MAX) {
+                    s_align_lost_frames++;
+                }
+                if (s_align_lost_frames < BALL_LOST_CONFIRM_FRAMES) {
+                    break;
+                }
+                /* 用户定稿（2026-09-04）：丢球恢复 = 后退 1.5s → 顺时针
+                 * 自转一次（幅度稍大）→ 回找球状态（SURVEY）。 */
+                s_align_recover_phase = 1;
+                begin_action(-BALL_ALIGN_BWD_PCT, 0, 0,
+                             BALL_ALIGN_BACKUP_MS, now_ms,
+                             "ALIGN_BACKUP", false);
                 break;
             }
-            /* 球最后已到车头附近时，只允许一次短倒车重捕获；否则回到
-             * 静止观察。删除旧版“看不见球仍向前找”的危险路径。 */
-            if (s_seen[s_current].y_ratio >= BALL_NEAR_Y_ARRIVE_LOST &&
-                s_align_recapture_count < BALL_ALIGN_RECAPTURE_MAX) {
-                s_align_recapture_count++;
-                s_align_lost_frames = 0;
-                begin_action(-BALL_ALIGN_RECAPTURE_PCT, 0, 0,
-                             BALL_ALIGN_RECAPTURE_MS, now_ms,
-                             "ALIGN_RECAPTURE", false);
-            } else {
-                ESP_LOGW(TAG, "对准中连续 %u 帧未见%s，停车重新观察",
-                         (unsigned)s_align_lost_frames,
-                         s_color_name[s_current]);
-                set_state(BALL_TASK_SURVEY, now_ms);
+            if (s_align_recover_phase == 1) {
+                /* 后退完毕仍无球：顺时针自转一次（幅度稍大：400ms），
+                 * 转完直接回找球状态（SURVEY）。 */
+                s_align_recover_phase = 2;
+                begin_action(0, BALL_SURVEY_DIR * BALL_SURVEY_TURN_PCT, 0,
+                             BALL_ALIGN_SEARCH_TURN_MS, now_ms,
+                             "ALIGN_CW_SEARCH", false);
+                break;
             }
+            /* 自转一次后仍无球：回找球状态（SURVEY）等待球/重新确认；
+             * ALIGN 20s 总超时仍在兜底。 */
+            ESP_LOGW(TAG, "自转一次后仍未见%s，回找球状态",
+                     s_color_name[s_current]);
+            set_state(BALL_TASK_SURVEY, now_ms);
             break;
         }
 
+        if (s_align_recover_phase != 0) {
+            s_align_recover_phase = 0;
+            ESP_LOGI(TAG, "找回%s（x=%+.2f），恢复对准推球",
+                     s_color_name[s_current], (double)ball->x_ratio);
+        }
         s_align_lost_frames = 0;
         s_seen[s_current].x_ratio = ball->x_ratio;
         s_seen[s_current].y_ratio = ball->y_ratio;

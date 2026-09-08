@@ -80,6 +80,13 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_SIGN_R       (-1)    /* C：左前轮 */
 #define STRAFE_SIGN_B       (-1)    /* B：正后轮（符号约定与 A/C 相反！） */
 #define STRAFE_B_GAIN       1.80f
+/* 避障左移专用平移增益（2026-09-04 新增）：实车反馈避障左移（12%）带
+ * 顺时针自旋。按标定规则"左移顺时针 → 减小 STRAFE_B_GAIN"，从全局
+ * 1.80 下调至 1.75 起步（每次 ±0.05）；只影响 AVOID_STRAFE_LEFT 状态，
+ * 不动推球对准的横移（全局增益）与找线右移（FIND 专用增益）。 */
+#define STRAFE_B_GAIN_AVOID_L 1.70f
+/* 2026-09-04 实车：1.75 左移仍带顺时针自旋（用户反馈），按标定规则
+ * "左移顺时针 → 减小"，再降一步至 1.70；若转成逆时针则 +0.05 回调。 */
 /* 找线右移专用平移增益（2026-09-01 新增）：死区非线性使平衡所需的后轮
  * 增益随指令大小变化——低速右移时前轮被死区压缩更多、B 相对偏快，
  * 按左移 12% 标定的全局 STRAFE_B_GAIN 不适用。本值只在 AVOID_FIND_LINE
@@ -90,8 +97,9 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define STRAFE_B_GAIN_FIND  1.45f
 
 /* ------------------------ 控制参数区 ------------------------ */
-/* 直线基准速度（2026-09-01 现场 16→15）；弯道前进按 15-|turn|/2 联动 */
-#define LINE_BASE_SPEED_PCT       15.0f
+/* 直线基准速度（2026-09-01 现场 16→15；2026-09-04 用户要求 +0.5 → 15.5）；
+ * 弯道前进按 15.5-|turn|/2 联动 */
+#define LINE_BASE_SPEED_PCT       15.5f
 #define LINE_MIN_SPEED_PCT         8
 #define LINE_MAX_TURN_PCT         10
 #define LINE_KP                    3.0f
@@ -224,8 +232,10 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
  * 超声 18cm 触发时车头距板约 18cm。
  *   左移 = 触发点横距(~20) + 板宽一半(~20) + 余量(5) ≈ 45cm；
  *   前进 = 剩余距离(~18) + 纵深(~15) + 出板余量(10) ≈ 43cm。 */
-#define AVOID_STRAFE_DIST_CM    14.0f   /* 现场标定 13→14：左移总距离 */
-#define AVOID_FORWARD_DIST_CM   14.0f   /* 初值：前进越过距离 */
+#define AVOID_STRAFE_DIST_CM    19.0f   /* 左移总距离（2026-09-04 用户定稿：
+                                            * 22 过头回调；速度 13% 保持不变） */
+#define AVOID_FORWARD_DIST_CM   18.0f   /* 前进越过距离（2026-09-04 用户要求
+                                            * 14→18 增大，与左移步进一致） */
 
 /* 由上面的距离/速度自动换算出各阶段时长（勿手改，改距离或速度即可）。 */
 #define AVOID_STRAFE_MS(dist_cm) \
@@ -250,7 +260,12 @@ static const float s_motor_gain[MOTOR_NUM] = { 1.00f, 1.00f, 0.90f };
 #define AVOID_FIND_LINE_MS      2500u   /* 找线总超时；超时进 FAILSAFE_STOP */
 #define AVOID_FIND_CENTER_ERR   0.35f   /* 目标线进入画面中央后停车确认 */
 #define AVOID_FIND_CONFIRM_SAMPLES 2u   /* 首帧停车，静止确认第二帧 */
-#define AVOID_STRAFE_SPEED_PCT   12     /* 平移速度档（高于 motor.c 最低有效出力） */
+#define AVOID_STRAFE_SPEED_PCT   13     /* 平移速度档（2026-09-04 用户要求
+                                            * 加力 12→13；高于最低有效出力） */
+/* 左移转向偏置（2026-09-04 新增）：增益微调（±0.05 ≈ B 轮 5%）在死区
+ * 噪声里看不出来，改用加法式直接修 yaw——负值 = 逆时针修正，压顺时针
+ * 自旋。现场规则：仍顺时针 → 更负（-4、-5）；变逆时针 → 往回加。 */
+#define AVOID_STRAFE_TURN_TRIM_PCT 0     /* 2026-09-04 实车 -1 仍轻微逆时针 → 归零观察 */
 /* 找线右移速度（2026-09-01 10→11）：现场要求提速 1 档；自旋由
  * STRAFE_B_GAIN_FIND 专用增益抑制（速度变化后如自旋方向/强度变化，
  * 对该值做 ±0.05 微调即可） */
@@ -898,8 +913,11 @@ void walking_update_cam(const camera_line_result_t *cam,
 
     case CAR_STATE_AVOID_STRAFE_LEFT:
         /* strafe>0 = 左移（方向由 STRAFE_SIGN_* 标定）。
-         * 时长 = AVOID_STRAFE_DIST_CM / STRAFE_SPEED_CM_S，见顶部标定接口。 */
-        apply_body_command(0, 0, AVOID_STRAFE_SPEED_PCT);
+         * 时长 = AVOID_STRAFE_DIST_CM / STRAFE_SPEED_CM_S，见顶部标定接口。
+         * 左移专用后轮增益 + 转向偏置（压顺时针自旋，见
+         * STRAFE_B_GAIN_AVOID_L / AVOID_STRAFE_TURN_TRIM_PCT）。 */
+        s_strafe_b_gain = STRAFE_B_GAIN_AVOID_L;
+        apply_body_command(0, AVOID_STRAFE_TURN_TRIM_PCT, AVOID_STRAFE_SPEED_PCT);
         if (elapsed_ms(now_ms, s_state_enter_ms) >=
                 AVOID_STRAFE_MS(AVOID_STRAFE_DIST_CM)) {
             enter_state(CAR_STATE_AVOID_FORWARD, now_ms);

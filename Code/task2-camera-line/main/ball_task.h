@@ -70,9 +70,8 @@ typedef enum {
 #define BALL_ALIGN_STRAFE_MAX_MS   250u    /* 最大脉冲（帧率约 3fps，留看帧余量） */
 #define BALL_ALIGN_CENTER_BAND     0.08f   /* 目标对居中死区（踢转消除） */
 #define BALL_ALIGN_EDGE_X          0.12f   /* 目标距画面边 <此值：先居中再横移 */
-#define BALL_ALIGN_KICK_TURN_PCT   15      /* 踢转转速：15×0.68=10.2%（B 轮）明显
-                                            * 越过 9% 死区下限；14 及以下 B 轮
-                                            * 起不了转，实车只响不动 */
+#define BALL_ALIGN_KICK_TURN_PCT   16      /* 踢转转速：16×0.68=10.9%（B 轮）。
+                                            * 2026-09-04 用户要求加力 15→16 */
 #define BALL_ALIGN_KICK_SCALE_MS   260u    /* 踢转时长 ≈ |偏差| × 此值 */
 #define BALL_ALIGN_KICK_MIN_MS     100u    /* 最小踢转：25ms 电流刚建立脉冲就结束，
                                             * 克服不了静摩擦（2026-09-03 反馈文档） */
@@ -82,6 +81,13 @@ typedef enum {
                                             * 决策权刹停，防 keep_drive 盲走 */
 #define BALL_CAMERA_STALE_MS       500u    /* 超过此时长无新视觉结果立即停车 */
 #define BALL_LOST_CONFIRM_FRAMES     4     /* 连续不同帧丢球才进入恢复 */
+/* 丢球恢复（2026-09-04 用户定稿）：先连续后退 1.5s（后退中见球即恢复
+ * 推球），退完仍无球 → 顺时针脉冲自转找球（转 250ms、隔 1.5s）。 */
+#define BALL_ALIGN_BACKUP_MS       1500u   /* 丢球后连续后退时长 */
+#define BALL_ALIGN_BWD_PCT         17      /* 后退速度 */
+#define BALL_ALIGN_SEARCH_TURN_MS  400u    /* 自转一次的幅度：400ms（普通脉冲
+                                            * 250ms；2026-09-04 用户要求幅度
+                                            * 稍大，1.5s 停顿间隔随循环删除） */
 #define BALL_ALIGN_RECAPTURE_MAX     1     /* 球近车头时最多一次短倒车找回 */
 #define BALL_ALIGN_RECAPTURE_PCT    12
 #define BALL_ALIGN_RECAPTURE_MS    220u
@@ -131,10 +137,10 @@ typedef enum {
  * ×系数"为止——轮子卡死/死区空转不计里程，会自动多倒补偿，比开环
  * 计时准。计时仍保留为上限兜底（编码器失效时退回纯计时逻辑）。
  * 注意：里程从 PUSH 入口起算，退回到的是"对准完成、开始撞球"的位置。 */
-#define BALL_RETURN_SPEED_PCT       14     /* 盲退速度（2026-09-03 实车 11 倒不动
-                                            * ——C 轮 0.90 增益下仅 9.9% 贴死区，
-                                            * 与前进不起步同机制；14 → C 轮 12.6%） */
-#define BALL_RETURN_PULSE_SCALE     1.0f   /* 退回里程 = 推进脉冲 × 此系数 */
+#define BALL_RETURN_SPEED_PCT       15     /* 盲退速度（2026-09-04 用户要求加力
+                                            * 14→15；C 轮 ×0.90 = 13.5%） */
+#define BALL_RETURN_PULSE_SCALE     1.3f   /* 退回里程 = 推进脉冲 × 此系数。
+                                            * 2026-09-04 实车 1.0 退得不够 → 1.3 */
 #define BALL_RETURN_TIME_SCALE      1.1f   /* 计时上限 = 推进时长 × 此系数 */
 #define BALL_RETURN_MAX_MS          8000u  /* 盲退上限（推进时长异常兜底） */
 
