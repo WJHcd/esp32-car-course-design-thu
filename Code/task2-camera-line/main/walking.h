@@ -5,8 +5,7 @@
 
 /* 任务二：摄像头巡线 + 硬编码平移避障；三轴混控（forward/turn/strafe）。
  * 避障序列（本赛道）：停车 → 左移 → 前进越过木板 → 右移找回黑线 → RUN；
- * 此后检测到赛道末尾 T 线 → T_HANDOFF 停稳 → BALL_TASK 推球。
- * ROUTE_HOLD/AVOID_HOLD 为异常停车，需重新摆车后复位，不自动旋转。 */
+ * 此后检测到赛道末尾 T 线（画面大面积黑）→ FINISH_STOP 停车结束任务。 */
 typedef enum {
     CAR_STATE_RUN = 0,
     CAR_STATE_LINE_SEARCH,
@@ -18,11 +17,8 @@ typedef enum {
     CAR_STATE_AVOID_FIND_LINE,
     CAR_STATE_FINISH_STOP,
     CAR_STATE_FAILSAFE_STOP,
-    /* 找球/推球任务（T 线停车确认后进入，见 ball_task 模块） */
+    /* 找球/推球任务（避障→巡线→1s 停车后进入，见 ball_task 模块） */
     CAR_STATE_BALL_TASK,
-    CAR_STATE_T_HANDOFF,
-    CAR_STATE_ROUTE_HOLD,
-    CAR_STATE_AVOID_HOLD,
 } car_state_t;
 
 typedef struct {
@@ -57,7 +53,7 @@ const char *walking_state_name(car_state_t state);
 walking_command_t walking_get_last_command(void);
 float walking_get_last_error(void);
 
-/** 是否已进入最终停车状态（T_HANDOFF 为中间交接，不算整场结束）。 */
+/** 是否已检测到终点 T 线并停车（任务完成标志，供主程序打印/判断）。 */
 bool walking_is_finished(void);
 
 /**

@@ -401,9 +401,7 @@ void app_integrated(void)
     }
 
     printf("\n========== 任务二综合模式：摄像头巡线 + 超声波避障 ==========\n");
-    printf("路线辅助：右锐角/左直角/左直角/右直角；摄像头决定入弯和出弯。\n");
-    printf("绕障后巡线到 T 横杆，停车确认后进入找球/推球；不再按 1s 触发。\n");
-    printf("横移使用编码器原始脉冲诊断；ROUTE_HOLD/AVOID_HOLD 需检查并复位。\n\n");
+    printf("避障完成回巡线 1s 后自动进入找球/推球任务。\n\n");
 
     while (true) {
         camera_line_result_t cam;
