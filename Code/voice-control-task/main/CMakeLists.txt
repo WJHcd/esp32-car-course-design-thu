@@ -12,6 +12,8 @@ idf_component_register(SRCS "main.c" "audio_in_uac.c" "voice_cmd.c"
                            esp_driver_ledc # 电机 PWM（D24A，20kHz）
                            esp_driver_spi  # TFT 状态屏（SPI2）
                            usb              # USB Host（UAC 麦克风，esp32s3）
+                           espressif__usb_host_uac  # UAC 主机类驱动（官方组件）
+                           esp_ringbuf      # usb_host_uac 依赖
                            esp_timer       # BLE 控制环/协议租约时间戳
                            nvs_flash       # BLE 协议栈参数存储
                            bt              # NimBLE 主机（CONFIG_BT_NIMBLE_ENABLED）
