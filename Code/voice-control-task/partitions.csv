@@ -1,0 +1,14 @@
+# ESP32-S3 分区表（16MB Flash）
+#
+# 相对默认分区表新增 "model" 数据分区，用于存放 ESP-SR 语音模型
+# （唤醒词 WakeNet + 命令词 MultiNet + AFE 模型，构建时自动合并为 model.bin）。
+#
+# factory 3MB：应用程序（含 ESP-SR 库代码）
+# model  8MB ：语音模型
+# 其余空间留空，可后续划分 media（提示音）分区。
+#
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x300000,
+model,    data, spiffs,  ,         0x800000,

@@ -1,0 +1,4 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf: ">=5.0"
+  espressif/esp-sr: "^2.0.0"   # 离线语音识别（唤醒词+中文命令词）
