@@ -7,19 +7,24 @@
 /* ============================================================
  * I2S 数字麦克风输入（INMP441 等 MEMS 麦克风）
  *
- * ⚠️ 接线待定（先跑通逻辑）：默认占用 GPIO 4/5/6，避开 USB Host(19/20)。
- *    - BCLK  ← 麦克风 SCK/BCLK
- *    - WS    ← 麦克风 WS/LRCK
- *    - DIN   → 麦克风 DOUT/SD
+ * ⚠️ 引脚（保留 task2 屏幕/编码器接线的配置）：
+ *    - 电机 D24A 占 1/2/4~11，task2 屏幕占 13/15/17（保留不动），
+ *      编码器 A 相占 12/14/16（保留不动，固件不用即无害）；
+ *    - 麦克风改挂当前全空闲的 GPIO 21/41/42（task2 中 41/42 为
+ *      JTAG 脚可作普通 GPIO、21 未占用；不用 JTAG 调试即可）。
+ *    - 若日后把编码器线拆掉，也可改回 12/14/16 以避开 41/42。
+ *    - BCLK  → 麦克风 SCK/BCLK（输出）
+ *    - WS    → 麦克风 WS/LRCK（输出）
+ *    - DIN   ← 麦克风 DOUT/SD（输入）
  *    - INMP441 的 L/R 脚：接 GND 选左声道（配合 I2S_SLOT_MODE_MONO 任一通道均可）
  *
  * 采样率：16kHz / 16bit / 单声道（ESP-SR 输入要求）
  * ============================================================ */
 
 #define MIC_I2S_NUM      I2S_NUM_0
-#define MIC_BCLK_PIN     GPIO_NUM_5
-#define MIC_WS_PIN       GPIO_NUM_4
-#define MIC_DIN_PIN      GPIO_NUM_6
+#define MIC_BCLK_PIN     GPIO_NUM_41
+#define MIC_WS_PIN       GPIO_NUM_21
+#define MIC_DIN_PIN      GPIO_NUM_42
 #define MIC_SAMPLE_RATE  16000
 
 static const char *TAG = "audio_in";
@@ -89,4 +94,9 @@ esp_err_t audio_in_read(int16_t *buf, size_t samples)
         memset((uint8_t *)buf + got, 0, bytes - got);
     }
     return ESP_OK;
+}
+
+bool audio_in_is_streaming(void)
+{
+    return s_rx != NULL;
 }

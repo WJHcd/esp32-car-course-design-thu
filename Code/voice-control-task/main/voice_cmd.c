@@ -23,24 +23,49 @@
  *
  * 参考官方示例：esp-skainet/examples/cn_speech_commands_recognition
  * 模型从 flash 的 "model" 分区加载（见 partitions.csv），
- * 唤醒词模型通过 menuconfig 选择（如 Hi,乐鑫 wn9_hilexin）。
+ * 唤醒词模型通过 menuconfig 选择（如 Hi,乐鑫 wn9_hilexin）；免唤醒
+ * 模式下模型保留加载但已 disable，仅命令词模型全程监听。
+ *
+ * 识别流程（免唤醒连续识别）：
+ *   AFE 创建后 disable_wakenet → MultiNet 逐帧监听（自带 6s 窗口）
+ *          → 命中命令 → 回调 app_menu（按当前模式裁决）
+ *          → 清空窗口继续监听
  * ============================================================ */
 
 static const char *TAG = "voice";
 
-/* ---------- 命令词表：顺序与枚举 ID 一一对应 ----------
- * 中文命令词由 MultiNet（中文模型）离线识别，无需训练。
- * 注意：命令词修改后需重新烧录（模型不变，仅命令表变化）。
+/* ---------- 命令词表 ----------
+ * 每个词条占用一个命令 ID（注册顺序即 ID：1..N），词条可共享事件
+ * （如 后退/倒退 都映射 VOICE_EVT_DRIVE_BACKWARD）。
+ *
+ * ⚠️ MultiNet 命令短语必须是**拼音**（小写、空格分词），中文会报
+ *    "invalid, please check format"（esp-sr v2 格式要求，2026-09-09
+ *    实机验证）；display 为中文名仅用于日志/提示。
+ * ⚠️ 新增命令词只需在词表加一行 + 烧录；是否在当前模式生效由
+ *    app_menu 裁决，词表本身不分模式。
  */
-static const char *s_phrases[VOICE_CMD_MAX] = {
-    [VOICE_CMD_NONE]    = NULL,
-    [VOICE_CMD_FORWARD]  = "前进",
-    [VOICE_CMD_BACKWARD] = "倒退",
-    [VOICE_CMD_LEFT]     = "左转",
-    [VOICE_CMD_RIGHT]    = "右转",
-    [VOICE_CMD_UTURN]    = "调头",
-    [VOICE_CMD_STOP]     = "停止",
+typedef struct {
+    voice_evt_t evt;        /* 识别后上报的事件 */
+    const char *mn_phrase;  /* MultiNet 拼音短语（识别用） */
+    const char *display;    /* 中文名（日志/提示用） */
+} voice_phrase_t;
+
+static const voice_phrase_t s_phrases[] = {
+    /* 功能选择菜单 */
+    { VOICE_EVT_SELECT_BT,    "lan ya yao kong",  "蓝牙遥控" },
+    { VOICE_EVT_SELECT_FACE,  "biao qing",        "表情" },
+    { VOICE_EVT_SELECT_VOICE, "yu yin yao kong",  "语音遥控" },
+    /* 语音遥控动作 */
+    { VOICE_EVT_DRIVE_FORWARD,  "qian jin",       "前进" },
+    { VOICE_EVT_DRIVE_BACKWARD, "hou tui",        "后退" },
+    { VOICE_EVT_DRIVE_BACKWARD, "dao tui",        "倒退" },   /* 旧版叫法，同义保留 */
+    { VOICE_EVT_DRIVE_LEFT,     "zuo zhuan",      "左转" },
+    { VOICE_EVT_DRIVE_RIGHT,    "you zhuan",      "右转" },
+    { VOICE_EVT_DRIVE_STOP,     "ting zhi",       "停止" },
+    /* 通用 */
+    { VOICE_EVT_BACK_SELECT,  "xuan ze gong neng", "选择功能" },
 };
+#define PHRASE_COUNT (sizeof(s_phrases) / sizeof(s_phrases[0]))
 
 static voice_cmd_cb_t s_cb = NULL;
 static void *s_cb_ctx = NULL;
@@ -79,35 +104,62 @@ static void feed_task(void *arg)
 }
 
 /* ============================================================
- * detect 任务：AFE → 唤醒 → 命令词 → 回调（放 core 1）
+ * detect 任务：AFE → MultiNet 连续识别 → 回调（放 core 1）
+ *
+ * 【免唤醒模式】不依赖 WakeNet：AFE 创建后立即 disable_wakenet，
+ * 每一帧都喂 MultiNet 识别（MN 自带 6s 窗口，命中/超时后自动重开），
+ * 直接说命令词即可执行。wakeup_state 字段全程忽略。
+ *
+ * 误触发控制：命令是否生效由 app_menu 按当前模式裁决
+ * （功能选择模式只有 蓝牙遥控/表情/语音遥控 会动作）。
  * ============================================================ */
 static void detect_task(void *arg)
 {
     esp_afe_sr_data_t *afe_data = (esp_afe_sr_data_t *)arg;
-    int afe_chunk = s_afe->get_fetch_chunksize(afe_data);
-    bool wakeup = false;
+    int fetch_err = 0;      /* 连续无数据计数（节流告警用） */
+    int chunk = s_afe->get_fetch_chunksize(afe_data);   /* 单帧样本数 */
+    uint32_t lvl_frames = 0;
+    int lvl_peak = 0;
+    uint32_t mn_timeouts = 0;
 
-    ESP_LOGI(TAG, "------------ 待唤醒（说“嗨 乐鑫”） ------------");
+    ESP_LOGI(TAG, "---- 聆听中（免唤醒）：直接说：蓝牙遥控/表情/语音遥控 ----");
 
     while (s_running) {
         afe_fetch_result_t *res = s_afe->fetch(afe_data);
-        if (!res || res->ret_value == ESP_FAIL) {
-            ESP_LOGE(TAG, "AFE fetch 错误，语音识别退出");
-            break;
-        }
-
-        /* 唤醒检测 */
-        if (res->wakeup_state == WAKENET_DETECTED) {
-            ESP_LOGI(TAG, "★ 已唤醒，请说命令（前进/倒退/左转/右转/调头/停止）");
-            s_mn->clean(s_mn_data);
-            wakeup = true;
-        }
-
-        if (!wakeup) {
+        if (!res) {
+            /* 暂无完整帧，慢速轮询等待 */
+            vTaskDelay(pdMS_TO_TICKS(2));
             continue;
         }
+        if (res->ret_value == ESP_FAIL) {
+            /* 麦克风未出流/偶发无数据时 AFE 会持续返回失败：
+             * 只告警节流，不退出——音频恢复后识别自动继续 */
+            if (++fetch_err == 1 || fetch_err % 200 == 0) {
+                ESP_LOGW(TAG, "AFE 无数据（麦克风未出流?）已等 %d 次", fetch_err);
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        fetch_err = 0;
 
-        /* 命令词识别 */
+        /* 电平表（诊断）：每约 2s 打一次该时段的峰值幅度。
+         * 正常说话峰值应到 2000~30000；恒为 0=麦克风静音/坏流；
+         * 常年 <300=音量过低，需在 audio_in_uac.c 调 UAC_INPUT_GAIN。 */
+        if (chunk > 0 && chunk < 4096) {
+            const int16_t *p = res->data;
+            for (int i = 0; i < chunk; i++) {
+                int v = p[i] >= 0 ? p[i] : -p[i];
+                if (v > lvl_peak) lvl_peak = v;
+            }
+            if (++lvl_frames >= 125) {
+                ESP_LOGI(TAG, "MIC LEVEL 峰值=%d（说话应 2000~30000，静音/无声≈0~50）",
+                         lvl_peak);
+                lvl_frames = 0;
+                lvl_peak = 0;
+            }
+        }
+
+        /* 免唤醒：忽略唤醒状态位，直接连续命令识别 */
         esp_mn_state_t st = s_mn->detect(s_mn_data, res->data);
         if (st == ESP_MN_STATE_DETECTING) {
             continue;
@@ -115,40 +167,46 @@ static void detect_task(void *arg)
 
         if (st == ESP_MN_STATE_DETECTED) {
             esp_mn_results_t *r = s_mn->get_results(s_mn_data);
-            voice_cmd_t cmd = VOICE_CMD_NONE;
+            voice_evt_t evt = VOICE_EVT_NONE;
             for (int i = 0; i < r->num; i++) {
                 ESP_LOGI(TAG, "TOP%d: command_id=%d phrase_id=%d string=%s prob=%.3f",
                          i + 1, r->command_id[i], r->phrase_id[i], r->string, r->prob[i]);
-                /* 取置信度最高的有效命令（command_id 即枚举值 1..6） */
-                if (cmd == VOICE_CMD_NONE &&
-                    r->command_id[i] > VOICE_CMD_NONE &&
-                    r->command_id[i] < VOICE_CMD_MAX) {
-                    cmd = (voice_cmd_t)r->command_id[i];
+                /* 取置信度最高的词条（command_id = 词表序号 1..N） */
+                if (evt == VOICE_EVT_NONE &&
+                    r->command_id[i] >= 1 && r->command_id[i] <= (int)PHRASE_COUNT) {
+                    evt = s_phrases[r->command_id[i] - 1].evt;
                 }
             }
-            if (cmd != VOICE_CMD_NONE && s_cb) {
-                ESP_LOGI(TAG, "→ 执行命令: %s", voice_cmd_to_str(cmd));
-                s_cb(cmd, s_cb_ctx);
+            if (evt != VOICE_EVT_NONE && s_cb) {
+                ESP_LOGI(TAG, "→ 识别事件: %s", voice_evt_to_str(evt));
+                s_cb(evt, s_cb_ctx);
             }
         }
 
+        /* 命中或超时：清空窗口，立即开始新一轮监听 */
         if (st == ESP_MN_STATE_TIMEOUT || st == ESP_MN_STATE_DETECTED) {
-            /* 超时或已识别：回到待唤醒状态 */
-            s_afe->enable_wakenet(afe_data);
-            wakeup = false;
-            ESP_LOGI(TAG, "------------ 待唤醒 ------------");
+            if (st == ESP_MN_STATE_TIMEOUT && ++mn_timeouts % 5 == 0) {
+                ESP_LOGI(TAG, "识别窗口超时 %lu 次（管线存活；说话未命中命令）",
+                         (unsigned long)mn_timeouts);
+            }
+            s_mn->clean(s_mn_data);
         }
     }
 
     vTaskDelete(NULL);
 }
 
-const char *voice_cmd_to_str(voice_cmd_t cmd)
+const char *voice_evt_to_str(voice_evt_t evt)
 {
-    if (cmd <= VOICE_CMD_NONE || cmd >= VOICE_CMD_MAX) {
-        return "未知";
+    if (evt == VOICE_EVT_NONE) {
+        return "无";
     }
-    return s_phrases[cmd];
+    for (int i = 0; i < (int)PHRASE_COUNT; i++) {
+        if (s_phrases[i].evt == evt) {
+            return s_phrases[i].display;
+        }
+    }
+    return "未知";
 }
 
 esp_err_t voice_cmd_init(voice_cmd_cb_t cb, void *user_ctx)
@@ -194,8 +252,13 @@ esp_err_t voice_cmd_init(voice_cmd_cb_t cb, void *user_ctx)
         ESP_LOGE(TAG, "AFE create 失败");
         return ESP_ERR_NO_MEM;
     }
+    /* 【免唤醒】唤醒词模型保留加载（保证 AFE 管线完整），
+     * 但创建后立即关闭——识别不依赖唤醒，直接连续听命令 */
+    if (s_afe->disable_wakenet) {
+        s_afe->disable_wakenet(s_afe_data);
+    }
 
-    /* 4. MultiNet 命令词识别 + 注册命令（无需训练模型） */
+    /* 4. MultiNet 命令词识别 + 注册命令词表（无需训练模型） */
     s_mn = esp_mn_handle_from_name(mn_name);
     s_mn_data = s_mn->create(mn_name, 6000);
     if (!s_mn_data) {
@@ -204,8 +267,8 @@ esp_err_t voice_cmd_init(voice_cmd_cb_t cb, void *user_ctx)
     }
     esp_mn_commands_alloc(s_mn, s_mn_data);      /* 初始化命令词链表 */
     esp_mn_commands_clear();
-    for (int id = 1; id < VOICE_CMD_MAX; id++) {
-        esp_mn_commands_add(id, s_phrases[id]);   /* id 即 voice_cmd_t 枚举值 */
+    for (int i = 0; i < (int)PHRASE_COUNT; i++) {
+        esp_mn_commands_add(i + 1, s_phrases[i].mn_phrase);   /* 命令 ID = 词表序号 */
     }
     esp_mn_commands_update();
     s_mn->print_active_speech_commands(s_mn_data);
@@ -219,6 +282,6 @@ esp_err_t voice_cmd_init(voice_cmd_cb_t cb, void *user_ctx)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "语音识别已启动：说“嗨 乐鑫”唤醒，然后下达命令");
+    ESP_LOGI(TAG, "语音识别已启动（免唤醒）：直接说 蓝牙遥控/表情/语音遥控");
     return ESP_OK;
 }
