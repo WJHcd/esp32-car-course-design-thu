@@ -78,7 +78,7 @@ typedef struct {
 
 static action_ctx_t s_action;
 static uint8_t s_align_lost_frames;
-static uint8_t s_align_recover_phase;    /* 丢球恢复：0=正常 1=后退中 2=顺时针自转找球 */
+static uint8_t s_align_recover_phase;    /* 丢球恢复：0=正常 1=后退中 2=自转已转 */
 static bool s_red_pri_done;              /* 红球优先衔接已完成（每轮任务一次） */
 static int s_red_pri_confirm;            /* 红球居中连续确认帧 */
 static uint8_t s_red_pri_lost;           /* 红球连续不可见帧（闪断刹停用） */
@@ -661,7 +661,16 @@ void ball_task_update(const camera_line_result_t *cam,
     case BALL_TASK_ALIGN: {
         /* 参考 ball_pushing 的闭环节拍：短动作结束后先刹停，再等一张
          * 真正的新画面。动作期间的新帧不会续期，也不会叠加第二条指令。 */
-        if (service_action(cam, now_ms)) {
+        const ball_blob_t *ball_pre = pick_target_blob(balls);
+        /* 后退找球中任何一帧重新见球：立即刹停，本帧即按正常对准流程
+         * 继续推球（用户定稿 2026-09-04）。 */
+        if (s_align_recover_phase != 0 && ball_pre->detected) {
+            reset_action();
+            s_align_recover_phase = 0;
+            s_align_lost_frames = 0;
+            ESP_LOGI(TAG, "后退找球中找回%s（x=%+.2f），恢复对准推球",
+                     s_color_name[s_current], (double)ball_pre->x_ratio);
+        } else if (service_action(cam, now_ms)) {
             break;
         }
         walking_direct_command(0, 0, 0);
@@ -678,43 +687,39 @@ void ball_task_update(const camera_line_result_t *cam,
 
         const ball_blob_t *ball = pick_target_blob(balls);
         if (!ball->detected) {
-            if (s_align_recover_phase == 0) {
-                if (s_align_lost_frames < UINT8_MAX) {
-                    s_align_lost_frames++;
-                }
-                if (s_align_lost_frames < BALL_LOST_CONFIRM_FRAMES) {
-                    break;
-                }
-                /* 用户定稿（2026-09-04）：丢球恢复 = 后退 1.5s → 顺时针
-                 * 自转一次（幅度稍大）→ 回找球状态（SURVEY）。 */
-                s_align_recover_phase = 1;
-                begin_action(-BALL_ALIGN_BWD_PCT, 0, 0,
-                             BALL_ALIGN_BACKUP_MS, now_ms,
-                             "ALIGN_BACKUP", false);
-                break;
-            }
             if (s_align_recover_phase == 1) {
-                /* 后退完毕仍无球：顺时针自转一次（幅度稍大：400ms），
-                 * 转完直接回找球状态（SURVEY）。 */
+                /* 后退 1.2s 完成仍无球：顺时针自转一次（幅度稍大 400ms），
+                 * 转完回找球状态（SURVEY）。 */
                 s_align_recover_phase = 2;
                 begin_action(0, BALL_SURVEY_DIR * BALL_SURVEY_TURN_PCT, 0,
                              BALL_ALIGN_SEARCH_TURN_MS, now_ms,
                              "ALIGN_CW_SEARCH", false);
                 break;
             }
-            /* 自转一次后仍无球：回找球状态（SURVEY）等待球/重新确认；
-             * ALIGN 20s 总超时仍在兜底。 */
-            ESP_LOGW(TAG, "自转一次后仍未见%s，回找球状态",
-                     s_color_name[s_current]);
-            set_state(BALL_TASK_SURVEY, now_ms);
+            if (s_align_recover_phase == 2) {
+                /* 自转一次后仍无球：回找球状态（SURVEY）等待球/重新确认；
+                 * ALIGN 20s 总超时仍在兜底。 */
+                ESP_LOGW(TAG, "自转一次后仍未见%s，回找球状态",
+                         s_color_name[s_current]);
+                set_state(BALL_TASK_SURVEY, now_ms);
+                break;
+            }
+            if (s_align_lost_frames < UINT8_MAX) {
+                s_align_lost_frames++;
+            }
+            if (s_align_lost_frames < BALL_LOST_CONFIRM_FRAMES) {
+                break;
+            }
+            /* 用户定稿（2026-09-04）：丢球 → 连续后退 1.2s（后退中任何
+             * 一帧重新见球，立即刹停恢复对准推球）；退完仍无球 → 顺时针
+             * 自转一次。 */
+            s_align_recover_phase = 1;
+            begin_action(-BALL_ALIGN_BWD_PCT, 0, 0,
+                         BALL_ALIGN_BACKUP_MS, now_ms,
+                         "ALIGN_BACKUP", false);
             break;
         }
 
-        if (s_align_recover_phase != 0) {
-            s_align_recover_phase = 0;
-            ESP_LOGI(TAG, "找回%s（x=%+.2f），恢复对准推球",
-                     s_color_name[s_current], (double)ball->x_ratio);
-        }
         s_align_lost_frames = 0;
         s_seen[s_current].x_ratio = ball->x_ratio;
         s_seen[s_current].y_ratio = ball->y_ratio;
