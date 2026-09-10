@@ -1,14 +1,12 @@
-# ESP32-S3 分区表（16MB Flash）
+# ESP32-S3 分区表（实车 flash 实为 32MB Octal，镜像头仍标 16MB，
+# 分区表按需扩展；当前布局总占用 ~11MB，远在 32MB 内）
 #
-# 相对默认分区表新增 "model" 数据分区，用于存放 ESP-SR 语音模型
-# （唤醒词 WakeNet + 命令词 MultiNet + AFE 模型，构建时自动合并为 model.bin）。
-#
-# factory 3MB：应用程序（含 ESP-SR 库代码）
-# model  8MB ：语音模型
-# 其余空间留空，可后续划分 media（提示音）分区。
+# factory 5MB：应用程序（ESP-SR + UVC/JPEG/quirc + GIF/WAV 资源后 2.94MB，
+#              原 3MB 仅剩 65KB 余量，扩容留出后续增长空间）
+# model   6MB：语音模型（srmodels.bin 实际 ~2.97MB，6MB 充足）
 #
 # Name,   Type, SubType, Offset,   Size,    Flags
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x300000,
-model,    data, spiffs,  ,         0x800000,
+factory,  app,  factory, 0x10000,  0x500000,
+model,    data, spiffs,  ,         0x600000,

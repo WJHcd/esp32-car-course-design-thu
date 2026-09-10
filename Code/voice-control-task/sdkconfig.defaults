@@ -51,3 +51,10 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_FREERTOS_HZ=1000
+
+#
+# 任务看门狗：quirc 整帧洪水填充可能超 5s（复杂背景病态耗时），
+# 已用中央裁剪窗限制大部分场景；这里不再把 CPU0 空闲任务挂到看门狗，
+# 避免周期性告警刷屏（真挂死靠复位恢复，演示场景可接受）。
+#
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n

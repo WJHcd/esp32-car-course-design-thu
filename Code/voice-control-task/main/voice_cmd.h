@@ -22,7 +22,7 @@ typedef enum {
 
     /* —— 功能选择菜单命令 —— */
     VOICE_EVT_SELECT_BT,        /* “蓝牙遥控” → 进入蓝牙遥控功能 */
-    VOICE_EVT_SELECT_FACE,      /* “表情”     → 进入表情功能 */
+    VOICE_EVT_SELECT_RAM,       /* “攻城槌”   → 进入攻城槌功能 */
     VOICE_EVT_SELECT_VOICE,     /* “语音遥控” → 进入语音遥控功能 */
 
     /* —— 语音遥控动作命令 —— */

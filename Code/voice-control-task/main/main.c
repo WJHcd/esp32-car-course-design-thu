@@ -1,58 +1,62 @@
 /*
- * 语音控制小车 —— 创新功能（自主题）
+ * 攻城槌小车 —— 创新任务（CreativeTask）
  *
- * 语音模块 = “一个接口，通向三个功能”（免唤醒：直接说命令）：
+ * 在语音功能选择（voice-control-task）基础上，将"表情"功能替换为
+ * "攻城槌"模式（语音说"攻城槌"进入，"选择功能"退出）：
  *
- *   功能选择（默认）下直接说出功能名切换：
- *     “蓝牙遥控” → 蓝牙遥控模式（BLE，手机遥控，已实现）
- *     “表情”     → 表情模式（TFT 彩屏，接口占位）
- *     “语音遥控” → 语音遥控模式（已实现：前进/后退/左转/右转/停止）
- *   任意模式说“选择功能” → 返回功能选择
+ *   ① 目标查找：小幅度脉冲自旋 + 搜索表情动画 + 搜索音效，
+ *      UVC 摄像头持续识别二维码（箱贴 "1"/"2"，"1" 为撞击目标）
+ *   ② 撞击：识别到 "1" → 撞击表情动画 + 撞击音效，
+ *      对准二维码缓慢前进，超声波判撞 → 后退 → 循环撞击
+ *   ③ 目标丢失自动退回查找；任意时刻"选择功能"返回菜单
  *
- * 模块划分：
- *   audio_in_uac.c    USB UAC 麦克风采集（摄像头三合一，16kHz/16bit/mono）
- *   voice_cmd.c       ESP-SR 识别核心：免唤醒连续命令识别 → 事件回调
- *   app_menu.c        功能选择状态机：模式切换/事件裁决/刹停
- *   bt_remote.c       蓝牙遥控（BLE MyCar-BLE，已实现）
- *   expression.c      表情（接口占位，ST7735 未接入）
- *   voice_remote.c    语音遥控（已实现，命令 → motion 动作）
- *   motion.c          D24A 真实电机驱动（三轮全向混控）
- *
- * 参考：esp-skainet/examples/cn_speech_commands_recognition
- * 依赖：flash "model" 分区（唤醒词+命令词模型；免唤醒模式下
- *       唤醒词模型保留加载但已 disable，命令词模型 mn7_cn 全程监听）
+ * 模块：
+ *   camera_task.c  UVC 摄像头 + quirc 二维码识别（结果共享）
+ *   usb_audio.c    UAC 麦克风（语音输入）+ 喇叭（音效播放，同摄像头 USB）
+ *   voice_cmd.c    ESP-SR 离线命令词识别（"攻城槌"等）
+ *   app_menu.c     功能选择状态机（蓝牙遥控 / 攻城槌 / 语音遥控）
+ *   ram_mode.c     攻城槌状态机（查找→撞击循环）
+ *   display.c      ILI9163 TFT + 双 GIF 表情动画
+ *   motion.c       D24A 电机三轮混控（task2 标定增益）
+ *   ultrasonic.c   HC-SR04 测距（撞击判定）
  */
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 
-#include "voice_cmd.h"
+#include "camera_task.h"
 #include "app_menu.h"
+#include "voice_cmd.h"
 #include "status_disp.h"
 
 static const char *TAG = "main";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "语音控制小车启动（离线语音识别：ESP-SR）");
+    ESP_LOGI(TAG, "攻城槌小车启动（语音功能选择 + 二维码找目标撞击）");
 
-    /* 1. 功能选择菜单（内部完成 motion_init + 三个功能模块 init） */
+    /* 1. 摄像头管线（usb_host_install 在此完成，UAC 依赖它；二维码持续识别） */
+    esp_err_t ret = camera_task_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "摄像头管线启动失败: %s", esp_err_to_name(ret));
+    }
+
+    /* 2. 功能选择菜单（内部完成 motion_init + 三个功能模块 init） */
     app_menu_init();
 
-    /* 2. 语音识别（失败不影响运行，仅禁用语音控制） */
-    esp_err_t ret = voice_cmd_init(app_menu_on_voice_evt, NULL);
+    /* 3. 语音识别（免唤醒：直接说 蓝牙遥控/攻城槌/语音遥控） */
+    ret = voice_cmd_init(app_menu_on_voice_evt, NULL);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "语音识别初始化失败: %s", esp_err_to_name(ret));
     }
 
-    /* 3. 状态屏（模式/BLE/电机/麦克风/动作回显；FACE 模式自动让屏） */
+    /* 4. 状态屏（模式/提示/麦克风/电机状态；攻城槌模式自动让屏给动画） */
     status_disp_init();
 
-    /* 3. 心跳打印 */
+    /* 5. 心跳打印 */
     while (1) {
-        ESP_LOGI(TAG, "运行中：模式=%s ｜ 直接说命令（免唤醒连续识别）",
-                 app_menu_mode_name(app_menu_get_mode()));
+        ESP_LOGI(TAG, "运行中：模式=%s", app_menu_mode_name(app_menu_get_mode()));
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
