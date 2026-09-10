@@ -21,9 +21,9 @@
 
 /** @brief 功能模式 */
 typedef enum {
-    APP_MODE_SELECT = 0,    /* 功能选择（默认：听 蓝牙遥控/表情/语音遥控） */
+    APP_MODE_SELECT = 0,    /* 功能选择（默认：听 蓝牙遥控/攻城槌/语音遥控） */
     APP_MODE_BT,            /* 蓝牙遥控：手机 APP 控制（接口占位） */
-    APP_MODE_FACE,          /* 表情：TFT 显示表情（接口占位） */
+    APP_MODE_RAM,           /* 攻城槌：语音进入，找二维码目标并反复撞击 */
     APP_MODE_VOICE,         /* 语音遥控：语音指挥小车（已实现） */
     APP_MODE_MAX,
 } app_mode_t;
@@ -37,8 +37,8 @@ void app_menu_init(void);
  * @brief 语音识别回调入口（注册给 voice_cmd_init）
  *
  * 按当前模式裁决事件：
- *   - 功能选择：蓝牙遥控/表情/语音遥控 → 切模式；其余提示忽略
- *   - 蓝牙遥控 / 表情：仅“选择功能”有效（返回菜单），其余提示忽略
+ *   - 功能选择：蓝牙遥控/攻城槌/语音遥控 → 切模式；其余提示忽略
+ *   - 蓝牙遥控 / 攻城槌：仅“选择功能”有效（返回菜单），其余提示忽略
  *   - 语音遥控：“选择功能”返回菜单；动作事件交给 voice_remote
  */
 void app_menu_on_voice_evt(voice_evt_t evt, void *user_ctx);

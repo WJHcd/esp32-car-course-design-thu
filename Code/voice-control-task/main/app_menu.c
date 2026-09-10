@@ -4,7 +4,7 @@
 #include "voice_cmd.h"
 #include "app_menu.h"
 #include "bt_remote.h"
-#include "expression.h"
+#include "ram_mode.h"
 #include "voice_remote.h"
 #include "status_disp.h"
 
@@ -23,7 +23,7 @@ static app_mode_t s_mode = APP_MODE_SELECT;
 static bool s_inited = false;
 
 static const char *s_mode_names[APP_MODE_MAX] = {
-    "功能选择", "蓝牙遥控", "表情", "语音遥控",
+    "功能选择", "蓝牙遥控", "攻城槌", "语音遥控",
 };
 
 const char *app_menu_mode_name(app_mode_t mode)
@@ -49,8 +49,8 @@ static void app_menu_switch(app_mode_t mode)
     case APP_MODE_BT:
         bt_remote_exit();
         break;
-    case APP_MODE_FACE:
-        expression_exit();
+    case APP_MODE_RAM:
+        ram_mode_exit();
         break;
     case APP_MODE_VOICE:
         voice_remote_exit();
@@ -65,8 +65,8 @@ static void app_menu_switch(app_mode_t mode)
     case APP_MODE_BT:
         bt_remote_enter();
         break;
-    case APP_MODE_FACE:
-        expression_enter();
+    case APP_MODE_RAM:
+        ram_mode_enter();
         break;
     case APP_MODE_VOICE:
         voice_remote_enter();
@@ -96,25 +96,25 @@ void app_menu_on_voice_evt(voice_evt_t evt, void *user_ctx)
         case VOICE_EVT_SELECT_BT:
             app_menu_switch(APP_MODE_BT);
             break;
-        case VOICE_EVT_SELECT_FACE:
-            app_menu_switch(APP_MODE_FACE);
+        case VOICE_EVT_SELECT_RAM:
+            app_menu_switch(APP_MODE_RAM);
             break;
         case VOICE_EVT_SELECT_VOICE:
             app_menu_switch(APP_MODE_VOICE);
             break;
         case VOICE_EVT_BACK_SELECT:
-            ESP_LOGI(TAG, "已在功能选择，请说：蓝牙遥控 / 表情 / 语音遥控");
+            ESP_LOGI(TAG, "已在功能选择，请说：蓝牙遥控 / 攻城槌 / 语音遥控");
             break;
         default:
-            ESP_LOGW(TAG, "功能选择模式忽略“%s”：仅支持 蓝牙遥控/表情/语音遥控",
+            ESP_LOGW(TAG, "功能选择模式忽略“%s”：仅支持 蓝牙遥控/攻城槌/语音遥控",
                      voice_evt_to_str(evt));
             break;
         }
         break;
 
     case APP_MODE_BT:
-    case APP_MODE_FACE:
-        /* 这两个模式的控制通道分别来自手机/TFT（接口占位），
+    case APP_MODE_RAM:
+        /* 蓝牙遥控控制通道来自手机；攻城槌为自主流程。
          * 语音仅响应“选择功能”返回菜单 */
         if (evt == VOICE_EVT_BACK_SELECT) {
             app_menu_switch(APP_MODE_SELECT);
@@ -157,18 +157,18 @@ void app_menu_init(void)
         return;
     }
 
-    /* 电机接口 + 三个功能模块（蓝牙/表情为占位，语音遥控已实现） */
+    /* 电机接口 + 三个功能模块（均已实现） */
     motion_init();
     voice_remote_init();
     bt_remote_init();
-    expression_init();
+    ram_mode_init();
 
     s_inited = true;
     s_mode = APP_MODE_SELECT;
 
     ESP_LOGI(TAG, "==============================================");
     ESP_LOGI(TAG, "语音功能选择就绪：免唤醒：直接说出功能名即可切换");
-    ESP_LOGI(TAG, "  “蓝牙遥控”→ 蓝牙遥控   “表情”→ 表情   “语音遥控”→ 语音遥控");
+    ESP_LOGI(TAG, "  “蓝牙遥控”→ 蓝牙遥控   “攻城槌”→ 攻城槌   “语音遥控”→ 语音遥控");
     ESP_LOGI(TAG, "==============================================");
 }
 

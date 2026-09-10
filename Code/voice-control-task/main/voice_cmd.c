@@ -53,15 +53,21 @@ typedef struct {
 static const voice_phrase_t s_phrases[] = {
     /* 功能选择菜单 */
     { VOICE_EVT_SELECT_BT,    "lan ya yao kong",  "蓝牙遥控" },
-    { VOICE_EVT_SELECT_FACE,  "biao qing",        "表情" },
+    { VOICE_EVT_SELECT_RAM,   "gong cheng chui",  "攻城槌" },
     { VOICE_EVT_SELECT_VOICE, "yu yin yao kong",  "语音遥控" },
-    /* 语音遥控动作 */
-    { VOICE_EVT_DRIVE_FORWARD,  "qian jin",       "前进" },
-    { VOICE_EVT_DRIVE_BACKWARD, "hou tui",        "后退" },
-    { VOICE_EVT_DRIVE_BACKWARD, "dao tui",        "倒退" },   /* 旧版叫法，同义保留 */
-    { VOICE_EVT_DRIVE_LEFT,     "zuo zhuan",      "左转" },
-    { VOICE_EVT_DRIVE_RIGHT,    "you zhuan",      "右转" },
-    { VOICE_EVT_DRIVE_STOP,     "ting zhi",       "停止" },
+    /* 语音遥控动作 —— 2 音节词 MultiNet 识别很弱（实机动作词全灭的
+     * 主因），每个动作同时注册 3~4 音节同义长词，长词识别更稳 */
+    { VOICE_EVT_DRIVE_FORWARD,  "qian jin",        "前进" },
+    { VOICE_EVT_DRIVE_FORWARD,  "xiang qian jin",  "向前进" },
+    { VOICE_EVT_DRIVE_BACKWARD, "hou tui",         "后退" },
+    { VOICE_EVT_DRIVE_BACKWARD, "xiang hou tui",   "向后退" },
+    { VOICE_EVT_DRIVE_BACKWARD, "dao tui",         "倒退" },   /* 旧版叫法 */
+    { VOICE_EVT_DRIVE_LEFT,     "zuo zhuan",       "左转" },
+    { VOICE_EVT_DRIVE_LEFT,     "xiang zuo zhuan", "向左转" },
+    { VOICE_EVT_DRIVE_RIGHT,    "you zhuan",       "右转" },
+    { VOICE_EVT_DRIVE_RIGHT,    "xiang you zhuan", "向右转" },
+    { VOICE_EVT_DRIVE_STOP,     "ting zhi",        "停止" },
+    { VOICE_EVT_DRIVE_STOP,     "ting xia lai",    "停下来" },
     /* 通用 */
     { VOICE_EVT_BACK_SELECT,  "xuan ze gong neng", "选择功能" },
 };
@@ -111,7 +117,7 @@ static void feed_task(void *arg)
  * 直接说命令词即可执行。wakeup_state 字段全程忽略。
  *
  * 误触发控制：命令是否生效由 app_menu 按当前模式裁决
- * （功能选择模式只有 蓝牙遥控/表情/语音遥控 会动作）。
+ * （功能选择模式只有 蓝牙遥控/攻城槌/语音遥控 会动作）。
  * ============================================================ */
 static void detect_task(void *arg)
 {
@@ -122,7 +128,7 @@ static void detect_task(void *arg)
     int lvl_peak = 0;
     uint32_t mn_timeouts = 0;
 
-    ESP_LOGI(TAG, "---- 聆听中（免唤醒）：直接说：蓝牙遥控/表情/语音遥控 ----");
+    ESP_LOGI(TAG, "---- 聆听中（免唤醒）：直接说：蓝牙遥控/攻城槌/语音遥控 ----");
 
     while (s_running) {
         afe_fetch_result_t *res = s_afe->fetch(afe_data);
@@ -282,6 +288,6 @@ esp_err_t voice_cmd_init(voice_cmd_cb_t cb, void *user_ctx)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "语音识别已启动（免唤醒）：直接说 蓝牙遥控/表情/语音遥控");
+    ESP_LOGI(TAG, "语音识别已启动（免唤醒）：直接说 蓝牙遥控/攻城槌/语音遥控");
     return ESP_OK;
 }
