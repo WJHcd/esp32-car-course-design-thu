@@ -1,5 +1,6 @@
 #include "qr_detect.h"
 #include "quirc.h"
+#include "esp_log.h"
 #include <string.h>
 
 /* ============================================================
@@ -10,6 +11,7 @@
  * 解码失败（ECC 错误）时用 quirc_flip 对反相码重试一次。
  * ============================================================ */
 
+static const char *TAG = "qr_detect";
 static struct quirc *s_q = NULL;
 
 void qr_detect_init(int width, int height, int max_codes)
@@ -19,9 +21,20 @@ void qr_detect_init(int width, int height, int max_codes)
         quirc_destroy(s_q);
         s_q = NULL;
     }
+    if (width <= 0 || height <= 0) {
+        ESP_LOGE(TAG, "非法尺寸 %dx%d", width, height);
+        return;
+    }
     s_q = quirc_new();
-    if (s_q) {
-        quirc_resize(s_q, width, height);
+    if (!s_q) {
+        ESP_LOGE(TAG, "quirc_new 失败（内存不足）");
+        return;
+    }
+    if (quirc_resize(s_q, width, height) < 0) {
+        ESP_LOGE(TAG, "quirc_resize %dx%d 失败（%dKB 缓冲分配失败）",
+                 width, height, width * height / 1024);
+        quirc_destroy(s_q);
+        s_q = NULL;
     }
 }
 

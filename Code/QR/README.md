@@ -48,15 +48,19 @@
 | 电机 STBY（全局使能） | GPIO1 | 高有效 |
 | 电机 PWM | GPIO2(A) / GPIO6(B) / GPIO9(C) | LEDC，20kHz，10bit |
 | 电机方向 | GPIO4/5(AIN1/2)、GPIO7/8(BIN1/2)、GPIO10/11(CIN1/2) | 普通输出 |
-| **TFT SCK（时钟）** | **GPIO21** | SPI 时钟 |
-| **TFT SDI（数据/MOSI）** | **GPIO18** | SPI 数据（只写，MISO 不接） |
-| **TFT CS** | **GPIO42** | 片选（低有效） |
-| **TFT D/C（数据/命令）** | **GPIO41** | 数据/命令选择 |
-| **TFT RST** | **GPIO40** | 复位（低有效） |
-| TFT VCC / GND | 3.3V / GND | 供电（本模块 **7 脚无 BL**，背光板载常亮） |
+| **TFT SCK（时钟）** | **GPIO13** | SPI 时钟 |
+| **TFT SDI（数据/MOSI）** | **GPIO15** | SPI 数据（只写，MISO 不接） |
+| **TFT D/C（数据/命令）** | **GPIO17** | 数据/命令选择 |
+| **TFT CS** | **硬件接 GND** | 总线上只有本屏，不占 GPIO |
+| **TFT RST** | **接 ESP32 EN** | 随板上电复位，不占 GPIO |
+| TFT VCC / GND | 3.3V / GND | 供电 |
 | 调试串口 UART0 | GPIO43（TX）/ GPIO44（RX） | 外部 USB 转 TTL |
+| 编码器（已接，本工程不用） | GPIO12/14/16（A 相） | task1/2 共用 |
+| 超声波（已接，本工程不用） | GPIO39(TRIG) / GPIO40(ECHO) | task1/2 共用 |
 
-> 引脚均可改（`pins.h` 统一定义）；上表均不与摄像头 USB(19/20)、电机、UART0 冲突。
+> 引脚与 **WJHcd/esp32-car-course-design 仓库（task1_ver2.0 / task2-camera-line）**
+> 的实车接线对齐（2026-09-08）；此前 SCK=21/SDI=18/CS=42/DC=41/RST=40 与
+> 车上实际接线不符，是 TFT 白屏的直接原因之一。
 
 ### 2.3 引脚冲突检查（关键）
 
@@ -67,8 +71,10 @@
 | 板载 WS2812 | 38 | 避开（不可用） |
 | Flash/PSRAM | 26~37 | 不可用 |
 | Strapping | 0, 3, 45, 46 | 上电敏感，避开 |
+| 编码器（其他任务） | 12, 14, 16 | 已接线，本工程不用但不冲突 |
+| 超声波（其他任务） | 39, 40 | 已接线，本工程不用但不冲突 |
 | 电机 | 1, 2, 4, 5, 6, 7, 8, 9, 10, 11 | 本工程占用 |
-| **TFT 显示屏** | **18, 21, 40, 41, 42** | 本工程占用（空闲脚；无背光脚） |
+| **TFT 显示屏** | **13, 15, 17**（CS 接地、RST 接 EN 不占脚） | 本工程占用 |
 
 > ⚠️ 摄像头占用原生 USB（GPIO19/20）做 USB Host，**下载与监视必须走外部 USB 转 TTL 接 UART0（GPIO43/44）**。
 
@@ -229,14 +235,19 @@ void display_idle(void);          /* 待机画面（纯色背景或"等待二维
 
 **实现要点**：
 
-1. **驱动**：ESP-IDF 内置 `esp_lcd` 组件 + `esp_lcd_panel_st7735`：
-   - `esp_lcd_panel_io_spi`（4线 SPI：SCL/MOSI/CS/DC；RST 接 GPIO，软件复位）
-   - `esp_lcd_panel_st7735` 面板，`PIXEL_FORMAT_RGB565`，分辨率 128×160
-   - ⚠️ **实机标定点**：ST7735 有多种版型，若显示偏移/镜像，调整 `esp_lcd_panel_swap_xy` / `mirror` / 面板 `x_start`/`y_start`（128×160 常见偏移为 0/0）。
-2. **表情绘制**：内置简单图元绘制（填色圆=脸、填色圆=眼睛、弧线/折线=嘴型），不同 `face_id` 改眼睛/嘴型/背景色即可表达：笑脸、哭脸、惊讶、眨眼、爱心眼等。
-   - 备选：直接嵌入 96×96 RGB565 表情位图数组（更好看，但需要离线生成工具）。
-3. **背光**：本模块 7 脚无 BL 引脚，背光由板载接 VCC **常亮**，无需软件控制。
-4. **内存**：帧缓冲放 PSRAM（128×160×2 ≈ 40KB）。
+1. **面板实为 ILI9163**（非 ST7735）：按 ST7735 序列配置电源参数（B1/C0/C5）
+   不匹配，表现为**背光亮但全白**（已在实车复现并定位）。初始化序列取自
+   龙邱官方 LQ_TFT18（spi_TFT18.c）的 ILI9163 版本，与 task2-camera-line
+   的 `tft_st7735.c` 一致（实车验证过）。
+2. **驱动**：自绘 SPI 底层（`spi_master` polling 事务 60 字节分块 + DC GPIO），
+   不用 esp_lcd；SPI 时钟 1MHz 起步（杜邦线友好，稳定后可升），SPI mode 0，
+   CS 硬件接地（`spics_io_num=-1`），RST 接 EN（上电自动复位）。
+3. **颜色**：实测该屏 R/B 物理互换（MADCTL BGR 位已置仍互换），发送前交换
+   RGB565 高低 5 位，上层颜色语义才正确。
+4. **表情绘制**：帧缓冲图元（填色圆=脸、填色圆=眼睛、月牙/圆=嘴型），不同
+   `face_id` 改眼睛/嘴型/背景色：笑脸、哭脸、惊讶、眨眼、爱心眼。
+5. **内存**：帧缓冲 128×160×2 ≈ 40KB，优先内部 DMA 内存，不足退回 PSRAM
+   （发送经内部 staging 缓冲分块，两种位置均可工作）。
 
 ### 4.5 电机动作（motion / motor）
 
@@ -246,20 +257,18 @@ void display_idle(void);          /* 待机画面（纯色背景或"等待二维
 
 ```c
 void motion_init(void);
-void motion_rotate(int speed, int ms);   /* 原地旋转 speed%(方向带符号)，持续 ms */
-void motion_wiggle(int speed, int ms, int repeat); /* 左右交替各 ms，repeat 次来回 */
+void motion_rotate(int speed);   /* 原地旋转 speed%（带符号），持续由状态机控制 */
 void motion_stop(void);
 ```
 
-**三轮运动学**（复用 task1 标定结论）：
+**三轮运动学**（对齐 task1_ver2.0 walking.c 实车标定）：
 
 | 动作 | 电机命令 |
 |---|---|
-| 前进（本工程不用） | A 反转、C 正转、B 停（task1 标定） |
-| **原地旋转** | L/R 同向转 + B 反向（`apply_body_command(0, turn)` 模型），B 系数 1.0 |
-| **扭动** | 左右各小幅原地旋转交替（`motion_rotate(+v, ms)` → `motion_rotate(-v, ms)` 交替 `repeat` 次） |
+| **原地旋转** | A=+turn、C=+turn、B=-0.68×turn（B 电机正转方向约定与 A/C 相反，0.68 为其实测增益 TURN_B_GAIN） |
+| **扭动** | 左右小幅原地旋转交替（`motion_rotate(+v)` ↔ `motion_rotate(-v)` 交替 `repeat` 次） |
 
-> ⚠️ **首次实车需标定**：确认"原地旋转"三电机方向符号（`motion_rotate(+speed)` 顺时针/逆时针），并调 `spin_dir` 使"顺/逆"符合预期。
+> ⚠️ **首次实车需标定**：确认"原地旋转"方向（`motion_rotate(+speed)` 顺时针/逆时针），如与预期相反把 `motion.c` 的 `MOTION_ROTATE_SIGN` 改成 -1。
 
 ### 4.6 主流程（main.c）
 
@@ -290,8 +299,9 @@ img_proc（循环）
 | 分辨率 / 帧率 | main.c | 640×480@15（降级 320×240@30） |
 | MJPEG 帧缓冲 | main.c | 128KB |
 | 解码节流间隔 | main.c | 300ms |
-| TFT SPI 引脚 | pins.h | SCK=21, SDI=18, CS=42, D/C=41, RST=40（7 脚模块，无 BL） |
-| 面板偏移/镜像 | display.c | 实机标定（0/0 + swap/mirror） |
+| TFT SPI 引脚 | pins.h | SCK=13, SDI=15, D/C=17（CS 接地、RST 接 EN） |
+| TFT SPI 时钟 | display.c | 1MHz（杜邦线友好，稳定后可升） |
+| 面板控制器 | display.c | **ILI9163**（非 ST7735，初始化序列见 §4.4） |
 | 舞蹈速度范围 | qr_dance.h | 0~100% |
 | 舞蹈总时长 | qr_dance.h 组合表 | 8~15s |
 | 表情表 | display.c | 笑脸/哭脸/惊讶/眨眼（可加） |
@@ -346,10 +356,12 @@ idf.py -p COMx monitor
 ## 8. 进度
 
 - [x] 工程说明文档
-- [ ] 工程骨架（CMakeLists / sdkconfig.defaults / main）
-- [ ] qr_detect（quirc 接入）
-- [ ] display（TFT ST7735 + 表情）
-- [ ] motor / motion（电机动作）
-- [ ] qr_dance 状态机
-- [ ] main.c 综合流程
-- [ ] 实车联调（解码 / 显示偏移 / 电机方向）
+- [x] 工程骨架（CMakeLists / sdkconfig.defaults / main）
+- [x] qr_detect（quirc 接入）
+- [x] display（TFT ST7735 + 表情）
+- [x] motor / motion（电机动作）
+- [x] qr_dance 状态机
+- [x] main.c 综合流程
+- [x] 代码审查加固（2026-09-07）：解码节流前置省 CPU / 摄像头停滞时舞蹈仍到点停车 / TFT 帧缓冲优先内部 DMA / 解码尺寸边界校验 / quirc 失败可见化
+- [x] 引脚与 WJHcd 仓库实车接线对齐（2026-09-08）：TFT 改 13/15/17（CS 接地、RST 接 EN）+ 面板更正为 ILI9163 自绘驱动 + 旋转运动学同步 task1_ver2.0 标定
+- [ ] 实车联调（解码 / 电机方向）

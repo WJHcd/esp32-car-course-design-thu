@@ -1,46 +1,51 @@
 #include "display.h"
 #include "pins.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_st7735.h"
+#include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_log.h"
+#include <inttypes.h>
 #include <math.h>
 #include <string.h>
 
 /* ============================================================
- * TFT 显示屏实现（ST7735，128x160，RGB565）
+ * TFT 显示屏实现（LQ_TFT18SPIV33，128x160，RGB565）
  *
- * 绘制方式：先把整屏画进 PSRAM 帧缓冲，最后一次性 draw_bitmap，
- * 避免逐行 SPI 事务。
+ * ⚠️ 面板实为 ILI9163 控制器（非 ST7735）：按 ST7735 序列配置
+ *    电源参数（B1/C0/C5）不匹配，表现为背光亮但全白。
+ *    初始化序列取自龙邱官方 LQ_TFT18（spi_TFT18.c）的 ILI9163
+ *    版本，与 WJHcd 仓库 task2-camera-line 的 tft_st7735.c 一致，
+ *    为该屏实车验证过的序列。
  *
- * ⚠️ ST7735 版型标定（若实机偏色/偏移/镜像，改下面宏）：
- *   DISPLAY_INVERT   颜色取反（多数 1.8" 需要 =1）
- *   DISPLAY_GAP_X/Y  面板偏移（常见 0/0，部分版型 2/1）
- *   DISPLAY_SWAP_XY  横竖交换（装反时用）
- *   DISPLAY_MIRROR_X/Y  镜像
- *   DISPLAY_RGB_ORDER_RGB  RGB/BGR 通道顺序
+ * 引脚按车上实物接线（见 pins.h）：SCK=13 / SDI=15 / DC=17，
+ * CS 硬件接地（不占 GPIO），RST 接 EN（上电自动复位）。
+ *
+ * 绘制方式：先把整屏画进帧缓冲，最后经 tft_set_window 一次性
+ * 推出。帧缓冲优先内部 DMA 内存，不足退回 PSRAM。
+ *
+ * ⚠️ 颜色：实测该屏 R/B 物理互换（MADCTL BGR 位已置仍互换），
+ *    push_fb 发送前交换 RGB565 高低 5 位，上层颜色语义才正确。
  * ============================================================ */
 
 #define TFT_W  128
 #define TFT_H  160
 
-#define LCD_HOST  SPI2_HOST
-
-#define DISPLAY_INVERT        1
-#define DISPLAY_GAP_X         0
-#define DISPLAY_GAP_Y         0
-#define DISPLAY_SWAP_XY       0
-#define DISPLAY_MIRROR_X      0
-#define DISPLAY_MIRROR_Y      0
-#define DISPLAY_RGB_ORDER_RGB 1
+#define TFT_HOST         SPI2_HOST
+/* 实测：1/2/4MHz 稳定。8MHz 全屏推屏 ~41ms，约 14fps（接近素材 16fps 采样上限）。
+ * 若撕裂：回退 5MHz（80/5=16 整分频）→ 4MHz。 */
+#define TFT_SPI_CLOCK_HZ (8 * 1000 * 1000)
+/* polling 事务安全分块（字节）：无 DMA 缓冲时单事务上限约 64 字节，
+ * 留余量取 60；tft_write 内部按此分块。 */
+#define TFT_SPI_CHUNK_MAX 60u
 
 static const char *TAG = "display";
-static esp_lcd_panel_handle_t s_panel = NULL;
-static uint16_t *s_fb = NULL;   /* 128x160 RGB565 帧缓冲（PSRAM） */
+static spi_device_handle_t s_spi = NULL;
+static uint16_t *s_fb = NULL;   /* 128x160 RGB565 帧缓冲 */
 
-/* ---- RGB565 颜色 ---- */
+/* ---- RGB565 颜色（语义值，发送时由 push_fb 做 R/B 互换） ---- */
 #define C_BLACK   0x0000
 #define C_WHITE   0xFFFF
 #define C_YELLOW  0xFFE0
@@ -49,6 +54,49 @@ static uint16_t *s_fb = NULL;   /* 128x160 RGB565 帧缓冲（PSRAM） */
 #define C_GREEN   0x07E0
 #define C_LBLUE   0x7DFF   /* 淡蓝 */
 #define C_BROWN   0x8800   /* 深棕（描边） */
+
+/* ---------------- SPI 底层（移植自 task2-camera-line tft_st7735.c） ---------------- */
+
+static void tft_write(bool is_data, const void *data, size_t length)
+{
+    if (length == 0) {
+        return;
+    }
+    ESP_ERROR_CHECK(gpio_set_level(TFT_PIN_DC, is_data ? 1 : 0));
+    const uint8_t *bytes = (const uint8_t *)data;
+    while (length > 0) {
+        const size_t chunk = length > TFT_SPI_CHUNK_MAX ? TFT_SPI_CHUNK_MAX : length;
+        spi_transaction_t transaction = {
+            .length = chunk * 8,
+            .tx_buffer = bytes,
+        };
+        esp_err_t err = spi_device_polling_transmit(s_spi, &transaction);
+        if (err != ESP_OK) {
+            /* 写屏失败只影响显示，不允许拖垮整车控制：跳过本次剩余数据 */
+            ESP_LOGE(TAG, "SPI 写入失败: %s", esp_err_to_name(err));
+            return;
+        }
+        bytes += chunk;
+        length -= chunk;
+    }
+}
+
+static void tft_command(uint8_t command, const uint8_t *params, size_t param_len)
+{
+    tft_write(false, &command, 1);
+    tft_write(true, params, param_len);
+}
+
+static void tft_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+{
+    const uint8_t column[] = { (uint8_t)(x0 >> 8), (uint8_t)x0,
+                               (uint8_t)(x1 >> 8), (uint8_t)x1 };
+    const uint8_t row[] = { (uint8_t)(y0 >> 8), (uint8_t)y0,
+                            (uint8_t)(y1 >> 8), (uint8_t)y1 };
+    tft_command(0x2A, column, sizeof(column));  /* CASET */
+    tft_command(0x2B, row, sizeof(row));         /* RASET */
+    tft_command(0x2C, NULL, 0);                  /* RAMWR */
+}
 
 /* ---------------- 帧缓冲图元 ---------------- */
 
@@ -190,57 +238,125 @@ static void face_heart(int cx, int cy)
 
 void display_init(void)
 {
-    spi_bus_config_t bus = {
+    /* 幂等保护：SPI2_HOST 总线重复初始化会 abort 重启 */
+    if (s_spi != NULL) {
+        return;
+    }
+
+    gpio_config_t dc_cfg = {
+        .pin_bit_mask = 1ULL << TFT_PIN_DC,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&dc_cfg));
+
+    const spi_bus_config_t bus_cfg = {
         .sclk_io_num = TFT_PIN_SCK,
         .mosi_io_num = TFT_PIN_SDI,
         .miso_io_num = -1,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = TFT_W * TFT_H * 2,
+        .max_transfer_sz = 512,
     };
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_CH_AUTO));
-
-    esp_lcd_panel_io_handle_t io = NULL;
-    esp_lcd_panel_io_spi_config_t io_cfg = {
-        .dc_gpio_num = TFT_PIN_DC,
-        .cs_gpio_num = TFT_PIN_CS,
-        .pclk_hz = 26 * 1000 * 1000,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-        .spi_mode = 0,
-        .trans_queue_depth = 10,
+    ESP_ERROR_CHECK(spi_bus_initialize(TFT_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
+    const spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz = TFT_SPI_CLOCK_HZ,
+        .mode = 0,
+        .spics_io_num = -1,  /* TFT CS 已硬件接地 */
+        .queue_size = 1,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io));
+    ESP_ERROR_CHECK(spi_bus_add_device(TFT_HOST, &dev_cfg, &s_spi));
 
-    esp_lcd_panel_dev_config_t panel_cfg = {
-        .reset_gpio_num = TFT_PIN_RST,
-        /* color_space 已废弃且与 rgb_ele_order 同处一个 union，只设 rgb_ele_order */
-        .rgb_ele_order = DISPLAY_RGB_ORDER_RGB ? LCD_RGB_ELEMENT_ORDER_RGB
-                                               : LCD_RGB_ELEMENT_ORDER_BGR,
-        .bits_per_pixel = 16,
+    /* DC 在 spi_bus_add_device 之后才配置完成，保证不被外设复用覆盖；
+     * RST 与 EN 同步，等待屏幕上电复位完成 */
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    /* ---- ILI9163 初始化序列（龙邱官方 LQ_TFT18，实车验证） ---- */
+    tft_command(0x11, NULL, 0);      /* SLPOUT：关闭睡眠，振荡器工作 */
+    vTaskDelay(pdMS_TO_TICKS(120));
+    const uint8_t color_mode = 0x05; /* 0x3A COLMOD：16bit/像素 RGB565 */
+    tft_command(0x3A, &color_mode, 1);
+    const uint8_t gamset = 0x04;     /* 0x26 GAMSET */
+    tft_command(0x26, &gamset, 1);
+    const uint8_t f2 = 0x01;         /* 0xF2 Driver Output Control */
+    tft_command(0xF2, &f2, 1);
+    /* 0xE0 正伽马校正（官方参数） */
+    const uint8_t gamma_pos[] = {
+        0x3F, 0x25, 0x1C, 0x1E, 0x20, 0x12, 0x2A, 0x90,
+        0x24, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_st7735(io, &panel_cfg, &s_panel));
+    /* 0xE1 负伽马校正（官方参数） */
+    const uint8_t gamma_neg[] = {
+        0x20, 0x20, 0x20, 0x20, 0x05, 0x00, 0x15, 0xA7,
+        0x3D, 0x18, 0x25, 0x2A, 0x2B, 0x2B, 0x3A,
+    };
+    tft_command(0xE0, gamma_pos, sizeof(gamma_pos));
+    tft_command(0xE1, gamma_neg, sizeof(gamma_neg));
+    const uint8_t frmctr[] = { 0x00, 0x00 };   /* 0xB1 帧率（官方 DIVA/VPA） */
+    tft_command(0xB1, frmctr, sizeof(frmctr));
+    const uint8_t invcl = 0x07;      /* 0xB4 NLA/NLB/NLC 反转控制 */
+    tft_command(0xB4, &invcl, 1);
+    const uint8_t pwctr1[] = { 0x0A, 0x02 };   /* 0xC0 电源控制 1 */
+    tft_command(0xC0, pwctr1, sizeof(pwctr1));
+    const uint8_t pwctr2 = 0x02;     /* 0xC1 电源控制 2 */
+    tft_command(0xC1, &pwctr2, 1);
+    const uint8_t vmctrl[] = { 0x4F, 0x5A };   /* 0xC5 VCOM 控制 */
+    tft_command(0xC5, vmctrl, sizeof(vmctrl));
+    const uint8_t vcom_offset = 0x40;          /* 0xC7 VCOM offset */
+    tft_command(0xC7, &vcom_offset, 1);
+    /* 0x36 MADCTL：竖屏正显 + BGR 位（官方 type=1 实测修正） */
+    const uint8_t madctl = 0xC8;
+    tft_command(0x36, &madctl, 1);
+    const uint8_t gctl = 0x00;       /* 0xB7 GCTL */
+    tft_command(0xB7, &gctl, 1);
+    tft_command(0x29, NULL, 0);      /* DISPON 开显示 */
+    tft_command(0x2C, NULL, 0);      /* RAMWR */
+    vTaskDelay(pdMS_TO_TICKS(100));
 
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, DISPLAY_INVERT));
-    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, DISPLAY_GAP_X, DISPLAY_GAP_Y));
-    if (DISPLAY_SWAP_XY) {
-        ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
+    /* 帧缓冲优先内部 DMA 内存（最稳）；不足再退回 PSRAM。
+     * 发送经内部 staging 缓冲分块拷贝，两种位置均可工作。 */
+    s_fb = heap_caps_malloc(TFT_W * TFT_H * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (s_fb == NULL) {
+        s_fb = heap_caps_malloc(TFT_W * TFT_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_fb != NULL) {
+            ESP_LOGW(TAG, "内部 DMA 内存不足，帧缓冲退回 PSRAM");
+        }
     }
-    if (DISPLAY_MIRROR_X || DISPLAY_MIRROR_Y) {
-        ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
+    if (s_fb == NULL) {
+        ESP_LOGE(TAG, "帧缓冲分配失败（%d 字节），显示不可用", TFT_W * TFT_H * 2);
+        return;
     }
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+    ESP_LOGI(TAG, "ILI9163 128x160 初始化完成（fb 在%s，SPI %d kHz）",
+             esp_ptr_internal(s_fb) ? "内部 RAM" : "PSRAM", TFT_SPI_CLOCK_HZ / 1000);
+}
 
-    s_fb = heap_caps_malloc(TFT_W * TFT_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    ESP_LOGI(TAG, "ST7735 128x160 初始化完成");
+static void push_region(int y0, int y1)
+{
+    if (!s_fb) return;
+    /* 该屏 R/B 物理互换：发送前交换 RGB565 高低 5 位，屏幕颜色才正确 */
+    static uint8_t stage[512];
+    tft_set_window(0, y0, TFT_W - 1, y1);
+    const uint16_t *px = s_fb + (size_t)y0 * TFT_W;
+    size_t remain = (size_t)(y1 - y0 + 1) * TFT_W;
+    while (remain > 0) {
+        const size_t n = remain > 256 ? 256 : remain;
+        for (size_t i = 0; i < n; i++) {
+            uint16_t c = px[i];
+            c = (uint16_t)(((c & 0x001F) << 11) | (c & 0x07E0) | ((c >> 11) & 0x001F));
+            stage[i * 2]     = (uint8_t)(c >> 8);
+            stage[i * 2 + 1] = (uint8_t)c;
+        }
+        tft_write(true, stage, n * 2);
+        px += n;
+        remain -= n;
+    }
 }
 
 static void push_fb(void)
 {
-    if (!s_fb) return;
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, TFT_W, TFT_H, s_fb);
+    push_region(0, TFT_H - 1);
 }
 
 void display_face(int face_id)
@@ -291,4 +407,91 @@ void display_idle(void)
     face_eyes_dot();
     face_mouth_straight();
     push_fb();
+}
+
+/* ============================================================
+ * GIF 表情动画（离线转换资源）
+ * 转换器：tools/qr_gif_convert.py（全局 256 色调色板 + 索引 RLE）
+ * 资源由 CMake EMBED_FILES 嵌入（main/gif_asset.bin）
+ * ============================================================ */
+
+extern const uint8_t gif_asset_start[] asm("_binary_gif_asset_bin_start");
+extern const uint8_t gif_asset_end[]   asm("_binary_gif_asset_bin_end");
+
+#define GIF_MAGIC   0x32534147  /* 'GAS2' */
+
+typedef struct __attribute__((packed)) {
+    uint32_t offset;
+    uint32_t size;
+    uint16_t delay_ms;
+    uint16_t flags;      /* bit0 = RLE */
+} gif_frame_entry_t;
+
+static bool s_gif_ok;
+static uint16_t s_gif_count, s_gif_w, s_gif_h;
+static const uint16_t *s_gif_pal;          /* RGB565 调色板（语义色，push_fb 统一换 R/B） */
+static const gif_frame_entry_t *s_gif_table;
+static int s_gif_y0;                       /* 在屏上的纵向偏移（居中） */
+
+static void gif_parse(void)
+{
+    if (s_gif_ok || s_fb == NULL) return;
+    const uint8_t *p = gif_asset_start;
+    uint32_t magic;
+    uint16_t count, w, h, pal_count;
+    memcpy(&magic, p, 4);
+    memcpy(&count, p + 4, 2);
+    memcpy(&w, p + 6, 2);
+    memcpy(&h, p + 8, 2);
+    memcpy(&pal_count, p + 10, 2);
+    if (magic != GIF_MAGIC || count == 0 || w == 0 || h == 0 || pal_count != 256) {
+        ESP_LOGE(TAG, "GIF 资源无效 (magic=%08" PRIx32 ")", magic);
+        return;
+    }
+    s_gif_count = count;
+    s_gif_w = w;
+    s_gif_h = h;
+    s_gif_pal = (const uint16_t *)(p + 12);
+    s_gif_table = (const gif_frame_entry_t *)(p + 12 + 512);
+    s_gif_y0 = (TFT_H - h) / 2;
+    s_gif_ok = true;
+    ESP_LOGI(TAG, "GIF 资源: %u 帧 %ux%u（y0=%d）", count, w, h, s_gif_y0);
+}
+
+int display_gif_count(void)
+{
+    gif_parse();
+    return s_gif_ok ? s_gif_count : 0;
+}
+
+/**
+ * @brief 绘制第 index 帧并推屏
+ * @return 该帧延时 ms（资源无效返回 0）
+ */
+int display_gif_draw(int index)
+{
+    gif_parse();
+    if (!s_gif_ok || index < 0 || index >= (int)s_gif_count) return 0;
+    const gif_frame_entry_t *e = &s_gif_table[index];
+    /* 帧偏移是相对资源文件起始的绝对偏移（含头/调色板/帧表），
+     * 必须从 gif_asset_start 起算；从数据区起算会整体错位 1112 字节。 */
+    const uint8_t *d = gif_asset_start + e->offset;
+    const int npix = s_gif_w * s_gif_h;
+    uint16_t *dst = s_fb + s_gif_y0 * TFT_W;
+
+    if (e->flags & 1) {
+        /* RLE: (u8 调色板索引, u8 行程) 对 */
+        int px = 0;
+        for (uint32_t left = e->size; left >= 2 && px < npix; left -= 2, d += 2) {
+            const uint16_t c = s_gif_pal[d[0]];
+            int run = d[1];
+            if (px + run > npix) run = npix - px;
+            for (int k = 0; k < run; k++) dst[px++] = c;
+        }
+    } else {
+        for (int px = 0; px < npix; px++) dst[px] = s_gif_pal[d[px]];
+    }
+    /* 只重推 GIF 所在区域（上下边带静止，不必每帧重发，也缩短传输） */
+    push_region(s_gif_y0, s_gif_y0 + s_gif_h - 1);
+    return e->delay_ms;
 }

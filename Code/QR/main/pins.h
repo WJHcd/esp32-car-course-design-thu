@@ -4,15 +4,25 @@
 /* =====================================================================
  * 二维码识别表情+跳舞 · 引脚分配（ESP32-S3-DevKitC-1）
  *
- * 占用清单：
- *   摄像头 USB Host    GPIO19/20（原生 USB，下载/监视必须空出）
- *   电机（D24A）       GPIO1(STBY) 2/6/9(PWM) 4/5/7/8/10/11(方向)
- *   TFT 显示屏(7脚)    GPIO21(SCK) 18(SDI) 42(CS) 41(D/C) 40(RST)
- *   调试 UART0         GPIO43/44
+ * 2026-09-08 与 WJHcd/esp32-car-course-design 仓库（task1_ver2.0 /
+ * task2-camera-line，车上实物接线并已验证）对齐：
+ *   - 电机 D24A 引脚两版一致，沿用；
+ *   - TFT 按车上实际接线改为 SCK=13 / SDI=15 / DC=17；
+ *     CS 硬件接地、RST 接 ESP32 的 EN，不再占用 GPIO
+ *     （此前 21/18/42/41/40 与实车不符，是 TFT 白屏的直接原因）；
+ *   - 面板实为 ILI9163（非 ST7735），初始化序列见 display.c。
+ *
+ * 引脚占用现状（与 task2-camera-line 一致）：
+ *   电机 D24A       GPIO 1,2,4,5,6,7,8,9,10,11
+ *   编码器（已接）  GPIO 12,14,16（本工程不使用）
+ *   TFT SPI         GPIO 13(SCK) 15(SDI) 17(D/C)
+ *   USB UVC 摄像头  GPIO 19(D-) / 20(D+)
+ *   超声波（已接）  GPIO 39,40（本工程不使用）
+ *   UART0 console   GPIO 43,44
  *   避开：GPIO0/3/45/46(strapping)、26~37(flash/PSRAM)、38(WS2812)
  * ===================================================================== */
 
-/* ---- 电机（D24A，同 task1） ---- */
+/* ---- 电机（D24A，同 task1_ver2.0 / motor-drive-test） ---- */
 #define GPIO_STBY   GPIO_NUM_1   /* 全局使能，高有效 */
 #define GPIO_PWMA   GPIO_NUM_2   /* LEDC 20kHz, 10bit */
 #define GPIO_PWMB   GPIO_NUM_6
@@ -24,13 +34,13 @@
 #define GPIO_CIN1   GPIO_NUM_10
 #define GPIO_CIN2   GPIO_NUM_11
 
-/* ---- TFT 显示屏 LQ_TFT18SPIV33（1.8寸 128x160，ST7735，7Pin） ----
- * 7Pin：SCK / SDI(MOSI) / CS / D/C / RST / VCC / GND（无 BL，背光常亮）
- * 注意：本模块无 MISO，SPI 只写。 */
-#define TFT_PIN_SCK   GPIO_NUM_21
-#define TFT_PIN_SDI   GPIO_NUM_18   /* MOSI */
-#define TFT_PIN_CS    GPIO_NUM_42
-#define TFT_PIN_DC    GPIO_NUM_41
-#define TFT_PIN_RST   GPIO_NUM_40
+/* ---- TFT 显示屏 LQ_TFT18SPIV33（1.8寸 128x160，ILI9163，7Pin） ----
+ * 按车上实物接线（task1_ver2.0 / task2-camera-line 已验证）：
+ *   SCK=13, SDI(MOSI)=15, DC=17；
+ *   CS 固定接 GND（SPI 总线上只有本屏），RST 接 ESP32 的 EN，
+ *   驱动侧不配置 CS/RST 引脚。 */
+#define TFT_PIN_SCK   GPIO_NUM_13
+#define TFT_PIN_SDI   GPIO_NUM_15   /* MOSI */
+#define TFT_PIN_DC    GPIO_NUM_17
 
 /* ---- 摄像头 USB Host（GPIO19/20 由硬件 USB 外设使用，无需 GPIO 定义） ---- */

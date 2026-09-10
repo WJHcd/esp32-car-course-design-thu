@@ -20,6 +20,8 @@ os.environ['IDF_PATH'] = r'C:\esp\v5.4.4\esp-idf'
 os.environ['IDF_TOOLS_PATH'] = r'C:\Espressif\tools'
 os.environ['IDF_PYTHON_ENV_PATH'] = r'C:\Espressif\tools\python\v5.4.4\venv'
 os.environ['IDF_PYTHON_CHECK_CONSTRAINTS'] = '0'
+# esp_rom 生成 gdbinit 需要（export 脚本通常会设置；路径须以分隔符结尾）
+os.environ['ESP_ROM_ELF_DIR'] = r'C:\Espressif\tools\esp-rom-elfs\20241011' + os.sep
 
 # 仅保留 Windows 风格工具路径（EIM 无 tools.json，需手动给出，同 build.bat）
 os.environ['PATH'] = (
