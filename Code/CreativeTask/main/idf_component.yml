@@ -1,0 +1,8 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf: ">=5.0"
+  espressif/esp-sr: "^2.0.0"        # 离线语音识别（唤醒词+中文命令词）
+  espressif/usb_host_uac: "^1.0.2"  # USB Audio Class 主机（摄像头麦克风/喇叭）
+  usb_host_uvc: "^2.5.2"            # USB Video Class 主机（摄像头二维码识别）
+  espressif/esp_jpeg: "^1.0.0"      # 软件 JPEG 解码
+  espressif/quirc: "^1.2.0"         # 二维码解码
